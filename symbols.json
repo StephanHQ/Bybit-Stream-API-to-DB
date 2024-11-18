@@ -1,0 +1,12 @@
+{
+    "symbols": [
+        {
+            "name": "BTCUSD",
+            "categories": ["trade", "orderBookL2_25"]
+        },
+        {
+            "name": "ETHUSD",
+            "categories": ["trade", "orderBookL2_25"]
+        }
+     ]
+}
