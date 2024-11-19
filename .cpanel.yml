@@ -1,0 +1,4 @@
+deployment:
+  tasks:
+    - export: GIT_DIR=/home/username/path/to/your/repository/.git
+    - /path/to/virtualenv/bin/python /home/username/public_html/Bybit-Stream-API-to-DB/bybit-listener.py
