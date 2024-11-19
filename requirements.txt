@@ -1,8 +1,8 @@
 # bybit_listener/requirements.txt
 
-pandas
-pyarrow
-websocket-client
-schedule
-PyYAML
-pytz
+websocket-client==1.6.1
+pandas==2.1.1
+schedule==1.2.0
+pyyaml==6.0
+pyarrow==13.0.0
+pytz==2023.3

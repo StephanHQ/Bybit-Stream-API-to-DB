@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 import pytz
 import logging
+import glob
 
 # Load configuration
 with open('config.yaml', 'r') as f:
@@ -28,13 +29,14 @@ logging.basicConfig(
 )
 
 class BybitListener:
-    def __init__(self, websocket_url, symbols, storage_path, timezone):
+    def __init__(self, websocket_url, symbols, storage_path, timezone, max_storage_gb=3):
         self.websocket_url = websocket_url
         self.symbols = symbols
         self.storage_path = storage_path
         self.timezone = pytz.timezone(timezone)
         self.data = {}
         self.lock = threading.Lock()
+        self.max_storage_bytes = max_storage_gb * (1024 ** 3)  # Convert GB to bytes
         self.initialize_data_storage()
 
     def initialize_data_storage(self):
@@ -106,11 +108,49 @@ class BybitListener:
                         # Clear the data after saving
                         self.data[symbol][category] = []
             logging.info("Data saved for date: %s", current_date)
+        
+        # After saving, manage storage to ensure it doesn't exceed the limit
+        self.manage_storage()
+
+    def manage_storage(self):
+        total_size = 0
+        parquet_files = []
+
+        # Traverse through all parquet files in storage_path
+        for root, dirs, files in os.walk(self.storage_path):
+            for file in files:
+                if file.endswith('.parquet'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        total_size += file_size
+                        parquet_files.append((file_path, os.path.getmtime(file_path)))
+                    except OSError as e:
+                        logging.error("Error accessing file %s: %s", file_path, e)
+
+        logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
+
+        # If total size exceeds the maximum allowed, delete oldest files
+        if total_size > self.max_storage_bytes:
+            # Sort files by modification time (oldest first)
+            parquet_files.sort(key=lambda x: x[1])
+            for file_path, mod_time in parquet_files:
+                try:
+                    file_size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    total_size -= file_size
+                    logging.info("Deleted old parquet file: %s to manage storage.", file_path)
+                    if total_size <= self.max_storage_bytes:
+                        break
+                except OSError as e:
+                    logging.error("Error deleting file %s: %s", file_path, e)
+
+            logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
 
 def schedule_saving(listener, save_time, timezone):
     def job():
         listener.save_data()
-
+    
     schedule_time = save_time
     schedule.every().day.at(schedule_time).do(job)
     logging.info("Scheduled daily save at %s %s", schedule_time, timezone)
@@ -124,7 +164,8 @@ def main():
         websocket_url=config['websocket_url'],
         symbols=symbols_config['symbols'],
         storage_path=config['parquet_storage_path'],
-        timezone=config['timezone']
+        timezone=config['timezone'],
+        max_storage_gb=3  # Set maximum storage to 3 GB
     )
 
     # Start WebSocket listener in a separate thread
@@ -140,8 +181,11 @@ def main():
     logging.info("Scheduler thread started.")
 
     # Keep the main thread alive
-    while True:
-        time.sleep(10)
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        logging.info("Shutting down BybitListener.")
 
 if __name__ == "__main__":
     main()
