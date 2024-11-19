@@ -1,11 +1,10 @@
-# bybit_listener/start_listener.sh
-
 #!/bin/bash
 
 # Variables
-VENV_DIR="env"
-SCRIPT="bybit_listener.py"
-LOG_FILE="logs/listener.log"
+SCRIPT="bybit-listener.py"
+LOG_FILE="./logs/listener.log"
+VENV_DIR="$(pwd)/env"         # Absolute path to the virtual environment
+PROJECT_DIR="$(pwd)"          # Absolute path to the project directory
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -17,8 +16,8 @@ echo_msg "Starting Bybit Listener..."
 # Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
-# Navigate to the project directory
-cd "$(dirname "$0")"
+# Navigate to the project directory (optional if already there)
+cd "$PROJECT_DIR"
 
 # Start the listener script using nohup if not already running
 if pgrep -f "$SCRIPT" > /dev/null

@@ -1,0 +1,676 @@
+# === bybit-listener.py ===
+# bybit_listener/bybit_listener.py
+
+import websocket
+import json
+import pandas as pd
+import threading
+import schedule
+import time
+import yaml
+import json
+import os
+from datetime import datetime
+import pytz
+import logging
+import glob
+
+# Load configuration
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+with open('symbols.json', 'r') as f:
+    symbols_config = json.load(f)
+
+# Setup logging
+logging.basicConfig(
+    filename=config['log_file'],
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+class BybitListener:
+    def __init__(self, websocket_url, symbols, storage_path, timezone, max_storage_gb=3):
+        self.websocket_url = websocket_url
+        self.symbols = symbols
+        self.storage_path = storage_path
+        self.timezone = pytz.timezone(timezone)
+        self.data = {}
+        self.lock = threading.Lock()
+        self.max_storage_bytes = max_storage_gb * (1024 ** 3)  # Convert GB to bytes
+        self.initialize_data_storage()
+
+    def initialize_data_storage(self):
+        for symbol in self.symbols:
+            self.data[symbol['name']] = {}
+            for category in symbol['categories']:
+                self.data[symbol['name']][category] = []
+
+    def on_message(self, ws, message):
+        msg = json.loads(message)
+        # Example structure handling; adjust based on actual Bybit message format
+        if 'topic' in msg:
+            topic = msg['topic']
+            for symbol in self.symbols:
+                if topic.startswith(symbol['name']):
+                    category = topic.split('.')[1]
+                    if category in symbol['categories']:
+                        with self.lock:
+                            self.data[symbol['name']][category].append(msg['data'])
+        else:
+            logging.warning("Received message without 'topic': %s", message)
+
+    def on_error(self, ws, error):
+        logging.error("WebSocket error: %s", error)
+
+    def on_close(self, ws, close_status_code, close_msg):
+        logging.info("WebSocket closed with code: %s, message: %s", close_status_code, close_msg)
+
+    def on_open(self, ws):
+        subscribe_args = []
+        for symbol in self.symbols:
+            for category in symbol['categories']:
+                subscribe_args.append(f"{category}.{symbol['name']}")
+        subscribe_message = {
+            "op": "subscribe",
+            "args": subscribe_args
+        }
+        ws.send(json.dumps(subscribe_message))
+        logging.info("Subscribed to streams: %s", subscribe_args)
+
+    def run(self):
+        while True:
+            try:
+                ws = websocket.WebSocketApp(
+                    self.websocket_url,
+                    on_open=self.on_open,
+                    on_message=self.on_message,
+                    on_error=self.on_error,
+                    on_close=self.on_close
+                )
+                ws.run_forever()
+            except Exception as e:
+                logging.error("Exception in WebSocket connection: %s", e)
+                time.sleep(5)  # Wait before reconnecting
+
+    def save_data(self):
+        with self.lock:
+            current_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
+            for symbol, categories in self.data.items():
+                for category, records in categories.items():
+                    if records:
+                        df = pd.DataFrame(records)
+                        # Define directory for the symbol and category
+                        dir_path = os.path.join(self.storage_path, symbol, category)
+                        os.makedirs(dir_path, exist_ok=True)
+                        file_path = os.path.join(dir_path, f"{current_date}.parquet")
+                        df.to_parquet(file_path, engine='pyarrow', compression='snappy')
+                        logging.info("Saved %d records to %s", len(records), file_path)
+                        # Clear the data after saving
+                        self.data[symbol][category] = []
+            logging.info("Data saved for date: %s", current_date)
+        
+        # After saving, manage storage to ensure it doesn't exceed the limit
+        self.manage_storage()
+
+    def manage_storage(self):
+        total_size = 0
+        parquet_files = []
+
+        # Traverse through all parquet files in storage_path
+        for root, dirs, files in os.walk(self.storage_path):
+            for file in files:
+                if file.endswith('.parquet'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        total_size += file_size
+                        parquet_files.append((file_path, os.path.getmtime(file_path)))
+                    except OSError as e:
+                        logging.error("Error accessing file %s: %s", file_path, e)
+
+        logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
+
+        # If total size exceeds the maximum allowed, delete oldest files
+        if total_size > self.max_storage_bytes:
+            # Sort files by modification time (oldest first)
+            parquet_files.sort(key=lambda x: x[1])
+            for file_path, mod_time in parquet_files:
+                try:
+                    file_size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    total_size -= file_size
+                    logging.info("Deleted old parquet file: %s to manage storage.", file_path)
+                    if total_size <= self.max_storage_bytes:
+                        break
+                except OSError as e:
+                    logging.error("Error deleting file %s: %s", file_path, e)
+
+            logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
+
+def schedule_saving(listener, save_time, timezone):
+    def job():
+        listener.save_data()
+    
+    schedule_time = save_time
+    schedule.every().day.at(schedule_time).do(job)
+    logging.info("Scheduled daily save at %s %s", schedule_time, timezone)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+def main():
+    listener = BybitListener(
+        websocket_url=config['websocket_url'],
+        symbols=symbols_config['symbols'],
+        storage_path=config['parquet_storage_path'],
+        timezone=config['timezone'],
+        max_storage_gb=3  # Set maximum storage to 3 GB
+    )
+
+    # Start WebSocket listener in a separate thread
+    ws_thread = threading.Thread(target=listener.run)
+    ws_thread.daemon = True
+    ws_thread.start()
+    logging.info("WebSocket listener started.")
+
+    # Schedule data saving
+    scheduler_thread = threading.Thread(target=schedule_saving, args=(listener, config['save_time'], config['timezone']))
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+    logging.info("Scheduler thread started.")
+
+    # Keep the main thread alive
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        logging.info("Shutting down BybitListener.")
+
+if __name__ == "__main__":
+    main()
+
+
+# === combine_files.py ===
+import os
+
+def combine_files(input_directory='.', output_file='combined_output.txt', file_extensions=None):
+    """
+    Combines contents of all files with the specified extensions in the input_directory
+    into a single output_file. Each file's content is preceded by a comment with its filename.
+    
+    Parameters:
+    - input_directory (str): Path to the directory containing files to combine.
+    - output_file (str): Path to the output file.
+    - file_extensions (list of str): List of file extensions to include (e.g., ['.py', '.sh']).
+    """
+    if file_extensions is None:
+        file_extensions = ['.py', '.sh', '.yaml', '.txt', '.json']
+    
+    # Normalize extensions to lowercase
+    file_extensions = [ext.lower() for ext in file_extensions]
+    
+    # Get absolute path of the input directory
+    input_directory = os.path.abspath(input_directory)
+    
+    # Check if input directory exists
+    if not os.path.isdir(input_directory):
+        print(f"Error: The directory '{input_directory}' does not exist.")
+        return
+    
+    # Open the output file in write mode
+    try:
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            # Iterate over all files in the input directory
+            for filename in sorted(os.listdir(input_directory)):
+                if any(filename.lower().endswith(ext) for ext in file_extensions):
+                    file_path = os.path.join(input_directory, filename)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as infile:
+                            # Write a comment with the filename
+                            outfile.write(f"# === {filename} ===\n")
+                            # Write the file's content
+                            content = infile.read()
+                            outfile.write(content + "\n\n")  # Add extra newline for separation
+                        print(f"Added: {filename}")
+                    except Exception as e:
+                        print(f"Failed to read {filename}: {e}")
+    except Exception as e:
+        print(f"Failed to write to output file '{output_file}': {e}")
+        return
+
+    print(f"\nAll specified files have been combined into '{output_file}'.")
+
+if __name__ == "__main__":
+    # You can modify the parameters below as needed
+    combine_files(
+        input_directory='.',                    # Current directory
+        output_file='combined_output.txt',      # Output file name
+        file_extensions=['.py', '.sh', '.yaml', '.txt', '.json']  # File extensions to include
+    )
+
+
+# === combined_output.txt ===
+# === bybit-listener.py ===
+# bybit_listener/bybit_listener.py
+
+import websocket
+import json
+import pandas as pd
+import threading
+import schedule
+import time
+import yaml
+import json
+import os
+from datetime import datetime
+import pytz
+import logging
+import glob
+
+# Load configuration
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+with open('symbols.json', 'r') as f:
+    symbols_config = json.load(f)
+
+# Setup logging
+logging.basicConfig(
+    filename=config['log_file'],
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+class BybitListener:
+    def __init__(self, websocket_url, symbols, storage_path, timezone, max_storage_gb=3):
+        self.websocket_url = websocket_url
+        self.symbols = symbols
+        self.storage_path = storage_path
+        self.timezone = pytz.timezone(timezone)
+        self.data = {}
+        self.lock = threading.Lock()
+        self.max_storage_bytes = max_storage_gb * (1024 ** 3)  # Convert GB to bytes
+        self.initialize_data_storage()
+
+    def initialize_data_storage(self):
+        for symbol in self.symbols:
+            self.data[symbol['name']] = {}
+            for category in symbol['categories']:
+                self.data[symbol['name']][category] = []
+
+    def on_message(self, ws, message):
+        msg = json.loads(message)
+        # Example structure handling; adjust based on actual Bybit message format
+        if 'topic' in msg:
+            topic = msg['topic']
+            for symbol in self.symbols:
+                if topic.startswith(symbol['name']):
+                    category = topic.split('.')[1]
+                    if category in symbol['categories']:
+                        with self.lock:
+                            self.data[symbol['name']][category].append(msg['data'])
+        else:
+            logging.warning("Received message without 'topic': %s", message)
+
+    def on_error(self, ws, error):
+        logging.error("WebSocket error: %s", error)
+
+    def on_close(self, ws, close_status_code, close_msg):
+        logging.info("WebSocket closed with code: %s, message: %s", close_status_code, close_msg)
+
+    def on_open(self, ws):
+        subscribe_args = []
+        for symbol in self.symbols:
+            for category in symbol['categories']:
+                subscribe_args.append(f"{category}.{symbol['name']}")
+        subscribe_message = {
+            "op": "subscribe",
+            "args": subscribe_args
+        }
+        ws.send(json.dumps(subscribe_message))
+        logging.info("Subscribed to streams: %s", subscribe_args)
+
+    def run(self):
+        while True:
+            try:
+                ws = websocket.WebSocketApp(
+                    self.websocket_url,
+                    on_open=self.on_open,
+                    on_message=self.on_message,
+                    on_error=self.on_error,
+                    on_close=self.on_close
+                )
+                ws.run_forever()
+            except Exception as e:
+                logging.error("Exception in WebSocket connection: %s", e)
+                time.sleep(5)  # Wait before reconnecting
+
+    def save_data(self):
+        with self.lock:
+            current_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
+            for symbol, categories in self.data.items():
+                for category, records in categories.items():
+                    if records:
+                        df = pd.DataFrame(records)
+                        # Define directory for the symbol and category
+                        dir_path = os.path.join(self.storage_path, symbol, category)
+                        os.makedirs(dir_path, exist_ok=True)
+                        file_path = os.path.join(dir_path, f"{current_date}.parquet")
+                        df.to_parquet(file_path, engine='pyarrow', compression='snappy')
+                        logging.info("Saved %d records to %s", len(records), file_path)
+                        # Clear the data after saving
+                        self.data[symbol][category] = []
+            logging.info("Data saved for date: %s", current_date)
+        
+        # After saving, manage storage to ensure it doesn't exceed the limit
+        self.manage_storage()
+
+    def manage_storage(self):
+        total_size = 0
+        parquet_files = []
+
+        # Traverse through all parquet files in storage_path
+        for root, dirs, files in os.walk(self.storage_path):
+            for file in files:
+                if file.endswith('.parquet'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        total_size += file_size
+                        parquet_files.append((file_path, os.path.getmtime(file_path)))
+                    except OSError as e:
+                        logging.error("Error accessing file %s: %s", file_path, e)
+
+        logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
+
+        # If total size exceeds the maximum allowed, delete oldest files
+        if total_size > self.max_storage_bytes:
+            # Sort files by modification time (oldest first)
+            parquet_files.sort(key=lambda x: x[1])
+            for file_path, mod_time in parquet_files:
+                try:
+                    file_size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    total_size -= file_size
+                    logging.info("Deleted old parquet file: %s to manage storage.", file_path)
+                    if total_size <= self.max_storage_bytes:
+                        break
+                except OSError as e:
+                    logging.error("Error deleting file %s: %s", file_path, e)
+
+            logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
+
+def schedule_saving(listener, save_time, timezone):
+    def job():
+        listener.save_data()
+    
+    schedule_time = save_time
+    schedule.every().day.at(schedule_time).do(job)
+    logging.info("Scheduled daily save at %s %s", schedule_time, timezone)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+def main():
+    listener = BybitListener(
+        websocket_url=config['websocket_url'],
+        symbols=symbols_config['symbols'],
+        storage_path=config['parquet_storage_path'],
+        timezone=config['timezone'],
+        max_storage_gb=3  # Set maximum storage to 3 GB
+    )
+
+    # Start WebSocket listener in a separate thread
+    ws_thread = threading.Thread(target=listener.run)
+    ws_thread.daemon = True
+    ws_thread.start()
+    logging.info("WebSocket listener started.")
+
+    # Schedule data saving
+    scheduler_thread = threading.Thread(target=schedule_saving, args=(listener, config['save_time'], config['timezone']))
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+    logging.info("Scheduler thread started.")
+
+    # Keep the main thread alive
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        logging.info("Shutting down BybitListener.")
+
+if __name__ == "__main__":
+    main()
+
+
+# === combine_files.py ===
+import os
+
+def combine_files(input_directory='.', output_file='combined_output.txt', file_extensions=None):
+    """
+    Combines contents of all files with the specified extensions in the input_directory
+    into a single output_file. Each file's content is preceded by a comment with its filename.
+    
+    Parameters:
+    - input_directory (str): Path to the directory containing files to combine.
+    - output_file (str): Path to the output file.
+    - file_extensions (list of str): List of file extensions to include (e.g., ['.py', '.sh']).
+    """
+    if file_extensions is None:
+        file_extensions = ['.py', '.sh', '.yaml', '.txt', '.json']
+    
+    # Normalize extensions to lowercase
+    file_extensions = [ext.lower() for ext in file_extensions]
+    
+    # Get absolute path of the input directory
+    input_directory = os.path.abspath(input_directory)
+    
+    # Check if input directory exists
+    if not os.path.isdir(input_directory):
+        print(f"Error: The directory '{input_directory}' does not exist.")
+        return
+    
+    # Open the output file in write mode
+    try:
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            # Iterate over all files in the input directory
+            for filename in sorted(os.listdir(input_directory)):
+                if any(filename.lower().endswith(ext) for ext in file_extensions):
+                    file_path = os.path.join(input_directory, filename)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as infile:
+                            # Write a comment with the filename
+                            outfile.write(f"# === {filename} ===\n")
+                            # Write the file's content
+                            content = infile.read()
+                            outfile.write(content + "\n\n")  # Add extra newline for separation
+                        print(f"Added: {filename}")
+                    except Exception as e:
+                        print(f"Failed to read {filename}: {e}")
+    except Exception as e:
+        print(f"Failed to write to output file '{output_file}': {e}")
+        return
+
+    print(f"\nAll specified files have been combined into '{output_file}'.")
+
+if __name__ == "__main__":
+    # You can modify the parameters below as needed
+    combine_files(
+        input_directory='.',                    # Current directory
+        output_file='combined_output.txt',      # Output file name
+        file_extensions=['.py', '.sh', '.yaml', '.txt', '.json']  # File extensions to include
+    )
+
+
+
+
+# === config.yaml ===
+# bybit_listener/config.yaml
+
+websocket_url: "wss://stream.bybit.com/realtime"
+
+parquet_storage_path: "/home/username/public_html/parquet_data/"
+
+# Timezone for daily rollover (e.g., UTC, your local timezone)
+timezone: "UTC"
+
+# Scheduling time for saving data (HH:MM in 24-hour format)
+save_time: "00:00"
+
+# Log file path
+log_file: "/home/username/bybit_listener/logs/listener.log"
+
+# Path to trigger file for on-demand saving
+trigger_file_path: "/home/username/bybit_listener/save_now.trigger"
+
+
+# === requirements.txt ===
+# bybit_listener/requirements.txt
+
+websocket-client==1.6.1
+pandas==2.1.1
+schedule==1.2.0
+pyyaml==6.0
+pyarrow==13.0.0
+pytz==2023.3
+
+
+# === restart_listener.sh ===
+#!/bin/bash
+
+# Variables
+SCRIPT="bybit-listener.py"
+VENV_DIR="$(pwd)/env"         # Absolute path to the virtual environment
+PROJECT_DIR="$(pwd)"          # Absolute path to the project directory
+LOG_FILE="./logs/listener.log"
+
+# Function to print messages with timestamp
+echo_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+echo_msg "Restarting Bybit Listener..."
+
+# Activate virtual environment
+source "$VENV_DIR/bin/activate"
+
+# Navigate to the project directory
+cd "$PROJECT_DIR"
+
+# Stop the listener if it's running
+if pgrep -f "$SCRIPT" > /dev/null
+then
+    pkill -f "$SCRIPT"
+    echo_msg "Bybit Listener stopped."
+    sleep 2
+fi
+
+# Start the listener
+nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
+echo_msg "Bybit Listener restarted."
+
+
+# === setup.sh ===
+# bybit_listener/setup.sh
+
+#!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# Variables (modify these as per your environment)
+VENV_DIR="env"
+STORAGE_PATH="/home/username/public_html/parquet_data"
+LOG_DIR="/home/username/bybit_listener/logs"
+LOG_FILE="$LOG_DIR/listener.log"
+
+# Function to print messages with timestamp
+echo_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+echo_msg "Starting setup..."
+
+# Create necessary directories
+echo_msg "Creating directories..."
+mkdir -p "$STORAGE_PATH"
+mkdir -p "$LOG_DIR"
+
+# Navigate to the project directory
+cd "$(dirname "$0")"
+
+# Create virtual environment if it doesn't exist
+if [ ! -d "$VENV_DIR" ]; then
+    echo_msg "Creating Python virtual environment..."
+    python3 -m venv "$VENV_DIR"
+fi
+
+# Activate virtual environment
+echo_msg "Activating virtual environment..."
+source "$VENV_DIR/bin/activate"
+
+# Upgrade pip
+echo_msg "Upgrading pip..."
+pip install --upgrade pip
+
+# Install dependencies
+echo_msg "Installing dependencies..."
+pip install -r requirements.txt
+
+# Make start and restart scripts executable
+chmod +x start_listener.sh
+chmod +x restart_listener.sh
+
+echo_msg "Setup completed successfully."
+
+
+# === start_listener.sh ===
+#!/bin/bash
+
+# Variables
+SCRIPT="bybit-listener.py"
+LOG_FILE="./logs/listener.log"
+VENV_DIR="$(pwd)/env"         # Absolute path to the virtual environment
+PROJECT_DIR="$(pwd)"          # Absolute path to the project directory
+
+# Function to print messages with timestamp
+echo_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+echo_msg "Starting Bybit Listener..."
+
+# Activate virtual environment
+source "$VENV_DIR/bin/activate"
+
+# Navigate to the project directory (optional if already there)
+cd "$PROJECT_DIR"
+
+# Start the listener script using nohup if not already running
+if pgrep -f "$SCRIPT" > /dev/null
+then
+    echo_msg "Bybit Listener is already running."
+else
+    nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
+    echo_msg "Bybit Listener started."
+fi
+
+
+# === symbols.json ===
+{
+    "symbols": [
+        {
+            "name": "BTCUSD",
+            "categories": ["trade", "orderBookL2_25"]
+        },
+        {
+            "name": "ETHUSD",
+            "categories": ["trade", "orderBookL2_25"]
+        }
+     ]
+}
+
+

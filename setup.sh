@@ -1,14 +1,12 @@
-# bybit_listener/setup.sh
-
 #!/bin/bash
 
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Variables (modify these as per your environment)
+# Variables
 VENV_DIR="env"
-STORAGE_PATH="/home/username/public_html/parquet_data"
-LOG_DIR="/home/username/bybit_listener/logs"
+STORAGE_PATH="./parquet_data"
+LOG_DIR="./logs"
 LOG_FILE="$LOG_DIR/listener.log"
 
 # Function to print messages with timestamp

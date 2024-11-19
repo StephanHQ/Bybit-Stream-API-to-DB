@@ -2,7 +2,7 @@
 
 websocket_url: "wss://stream.bybit.com/realtime"
 
-parquet_storage_path: "/home/username/public_html/parquet_data/"
+parquet_storage_path: "./parquet_data/"
 
 # Timezone for daily rollover (e.g., UTC, your local timezone)
 timezone: "UTC"
@@ -11,7 +11,7 @@ timezone: "UTC"
 save_time: "00:00"
 
 # Log file path
-log_file: "/home/username/bybit_listener/logs/listener.log"
+log_file: "./logs/listener.log"
 
 # Path to trigger file for on-demand saving
-trigger_file_path: "/home/username/bybit_listener/save_now.trigger"
+trigger_file_path: "./save_now.trigger"
