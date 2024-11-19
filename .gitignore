@@ -1,0 +1,44 @@
+# Byte-compiled Python files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment directory
+env/
+*.venv/
+.venv/
+
+# Configuration files with sensitive information
+config.yaml
+
+# Log files
+logs/
+*.log
+
+# Parquet files
+public_html/parquet_data/
+*.parquet
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*.bak
+.DS_Store
+
+# Trigger file
+save_now.trigger
+
+# System files
+Thumbs.db
+*.~lock.*
+*.part
+
+# IDE-specific files
+.vscode/
+.idea/
+*.iml
+
+# OS-specific files
+desktop.ini
