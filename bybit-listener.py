@@ -7,12 +7,11 @@ import threading
 import schedule
 import time
 import yaml
-import json
 import os
 from datetime import datetime
 import pytz
 import logging
-import glob
+from logging.handlers import RotatingFileHandler
 
 # Load configuration
 with open('config.yaml', 'r') as f:
@@ -21,11 +20,18 @@ with open('config.yaml', 'r') as f:
 with open('symbols.json', 'r') as f:
     symbols_config = json.load(f)
 
-# Setup logging
+# Setup logging with rotation
+log_handler = RotatingFileHandler(
+    config['log_file'],
+    maxBytes=5*1024*1024,  # 5 MB per log file
+    backupCount=5,
+    encoding='utf-8'
+)
+
 logging.basicConfig(
-    filename=config['log_file'],
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[log_handler]
 )
 
 class BybitListener:
@@ -46,18 +52,37 @@ class BybitListener:
                 self.data[symbol['name']][category] = []
 
     def on_message(self, ws, message):
-        msg = json.loads(message)
-        # Example structure handling; adjust based on actual Bybit message format
-        if 'topic' in msg:
+        try:
+            msg = json.loads(message)
+            
+            # Validate that 'topic' and 'data' exist in the message
+            if 'topic' not in msg or 'data' not in msg:
+                logging.warning("Malformed message received: %s", message)
+                return
+            
             topic = msg['topic']
+            data = msg['data']
+            
+            # Ensure 'data' is a list
+            if not isinstance(data, list):
+                logging.warning("Invalid data format in message: %s", message)
+                return
+            
             for symbol in self.symbols:
                 if topic.startswith(symbol['name']):
                     category = topic.split('.')[1]
                     if category in symbol['categories']:
                         with self.lock:
-                            self.data[symbol['name']][category].append(msg['data'])
-        else:
-            logging.warning("Received message without 'topic': %s", message)
+                            for item in data:
+                                # Ensure each item is a dictionary
+                                if isinstance(item, dict):
+                                    self.data[symbol['name']][category].append(item)
+                                else:
+                                    logging.warning("Invalid data item format: %s", item)
+        except json.JSONDecodeError:
+            logging.error("Failed to decode JSON message: %s", message)
+        except Exception as e:
+            logging.error("Unexpected error in on_message: %s", e)
 
     def on_error(self, ws, error):
         logging.error("WebSocket error: %s", error)
@@ -75,7 +100,7 @@ class BybitListener:
             "args": subscribe_args
         }
         ws.send(json.dumps(subscribe_message))
-        logging.info("Subscribed to streams: %s", subscribe_args)
+        logging.info("Subscribed to %d streams.", len(subscribe_args))
 
     def run(self):
         while True:
@@ -93,59 +118,65 @@ class BybitListener:
                 time.sleep(5)  # Wait before reconnecting
 
     def save_data(self):
-        with self.lock:
-            current_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
-            for symbol, categories in self.data.items():
-                for category, records in categories.items():
-                    if records:
-                        df = pd.DataFrame(records)
-                        # Define directory for the symbol and category
-                        dir_path = os.path.join(self.storage_path, symbol, category)
-                        os.makedirs(dir_path, exist_ok=True)
-                        file_path = os.path.join(dir_path, f"{current_date}.parquet")
-                        df.to_parquet(file_path, engine='pyarrow', compression='snappy')
-                        logging.info("Saved %d records to %s", len(records), file_path)
-                        # Clear the data after saving
-                        self.data[symbol][category] = []
-            logging.info("Data saved for date: %s", current_date)
-        
-        # After saving, manage storage to ensure it doesn't exceed the limit
-        self.manage_storage()
+        try:
+            with self.lock:
+                current_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
+                for symbol, categories in self.data.items():
+                    for category, records in categories.items():
+                        if records:
+                            df = pd.DataFrame(records)
+                            # Define directory for the symbol and category
+                            dir_path = os.path.join(self.storage_path, symbol, category)
+                            os.makedirs(dir_path, exist_ok=True)
+                            file_path = os.path.join(dir_path, f"{current_date}.parquet")
+                            df.to_parquet(file_path, engine='pyarrow', compression='snappy')
+                            logging.info("Saved %d records to %s", len(records), file_path)
+                            # Clear the data after saving
+                            self.data[symbol][category] = []
+                logging.info("Data saved for date: %s", current_date)
+            
+            # After saving, manage storage to ensure it doesn't exceed the limit
+            self.manage_storage()
+        except Exception as e:
+            logging.error("Error during save_data: %s", e)
 
     def manage_storage(self):
-        total_size = 0
-        parquet_files = []
+        try:
+            total_size = 0
+            parquet_files = []
 
-        # Traverse through all parquet files in storage_path
-        for root, dirs, files in os.walk(self.storage_path):
-            for file in files:
-                if file.endswith('.parquet'):
-                    file_path = os.path.join(root, file)
+            # Traverse through all parquet files in storage_path
+            for root, dirs, files in os.walk(self.storage_path):
+                for file in files:
+                    if file.endswith('.parquet'):
+                        file_path = os.path.join(root, file)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            total_size += file_size
+                            parquet_files.append((file_path, os.path.getmtime(file_path)))
+                        except OSError as e:
+                            logging.error("Error accessing file %s: %s", file_path, e)
+
+            logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
+
+            # If total size exceeds the maximum allowed, delete oldest files
+            if total_size > self.max_storage_bytes:
+                # Sort files by modification time (oldest first)
+                parquet_files.sort(key=lambda x: x[1])
+                for file_path, mod_time in parquet_files:
                     try:
                         file_size = os.path.getsize(file_path)
-                        total_size += file_size
-                        parquet_files.append((file_path, os.path.getmtime(file_path)))
+                        os.remove(file_path)
+                        total_size -= file_size
+                        logging.info("Deleted old parquet file: %s to manage storage.", file_path)
+                        if total_size <= self.max_storage_bytes:
+                            break
                     except OSError as e:
-                        logging.error("Error accessing file %s: %s", file_path, e)
+                        logging.error("Error deleting file %s: %s", file_path, e)
 
-        logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
-
-        # If total size exceeds the maximum allowed, delete oldest files
-        if total_size > self.max_storage_bytes:
-            # Sort files by modification time (oldest first)
-            parquet_files.sort(key=lambda x: x[1])
-            for file_path, mod_time in parquet_files:
-                try:
-                    file_size = os.path.getsize(file_path)
-                    os.remove(file_path)
-                    total_size -= file_size
-                    logging.info("Deleted old parquet file: %s to manage storage.", file_path)
-                    if total_size <= self.max_storage_bytes:
-                        break
-                except OSError as e:
-                    logging.error("Error deleting file %s: %s", file_path, e)
-
-            logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
+                logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
+        except Exception as e:
+            logging.error("Error during manage_storage: %s", e)
 
 def schedule_saving(listener, save_time, timezone):
     def job():

@@ -2,7 +2,7 @@
 
 # Variables
 SCRIPT="bybit-listener.py"
-LOG_FILE="./logs/listener.log"
+LOG_FILE="$(pwd)/logs/listener.log"
 VENV_DIR="$(pwd)/env"         # Absolute path to the virtual environment
 PROJECT_DIR="$(pwd)"          # Absolute path to the project directory
 
@@ -16,7 +16,7 @@ echo_msg "Starting Bybit Listener..."
 # Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
-# Navigate to the project directory (optional if already there)
+# Navigate to the project directory
 cd "$PROJECT_DIR"
 
 # Start the listener script using nohup if not already running

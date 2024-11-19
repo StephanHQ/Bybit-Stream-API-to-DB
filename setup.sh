@@ -3,7 +3,7 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Variables
+# Variables (modify these as per your environment)
 VENV_DIR="env"
 STORAGE_PATH="./parquet_data"
 LOG_DIR="./logs"
@@ -16,10 +16,10 @@ echo_msg() {
 
 echo_msg "Starting setup..."
 
-# Create necessary directories
+# Create necessary directories with restrictive permissions
 echo_msg "Creating directories..."
-mkdir -p "$STORAGE_PATH"
-mkdir -p "$LOG_DIR"
+mkdir -p "$STORAGE_PATH" && chmod 700 "$STORAGE_PATH"
+mkdir -p "$LOG_DIR" && chmod 700 "$LOG_DIR"
 
 # Navigate to the project directory
 cd "$(dirname "$0")"
@@ -28,6 +28,9 @@ cd "$(dirname "$0")"
 if [ ! -d "$VENV_DIR" ]; then
     echo_msg "Creating Python virtual environment..."
     python3 -m venv "$VENV_DIR"
+    echo_msg "Virtual environment created."
+else
+    echo_msg "Virtual environment already exists."
 fi
 
 # Activate virtual environment
@@ -43,7 +46,7 @@ echo_msg "Installing dependencies..."
 pip install -r requirements.txt
 
 # Make start and restart scripts executable
-chmod +x start_listener.sh
-chmod +x restart_listener.sh
+chmod 700 start_listener.sh
+chmod 700 restart_listener.sh
 
 echo_msg "Setup completed successfully."

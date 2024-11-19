@@ -25,6 +25,8 @@ then
     pkill -f "$SCRIPT"
     echo_msg "Bybit Listener stopped."
     sleep 2
+else
+    echo_msg "Bybit Listener is not running."
 fi
 
 # Start the listener

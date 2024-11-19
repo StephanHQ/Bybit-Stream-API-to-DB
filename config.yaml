@@ -1,3 +1,4 @@
+# === config.yaml ===
 # bybit_listener/config.yaml
 
 websocket_url: "wss://stream.bybit.com/realtime"
