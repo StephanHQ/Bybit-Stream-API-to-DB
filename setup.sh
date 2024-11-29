@@ -37,15 +37,29 @@ fi
 echo_msg "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
-# Upgrade pip
-echo_msg "Upgrading pip..."
-pip install --upgrade pip
+# Ensure necessary build tools are installed (for macOS)
+echo_msg "Installing necessary build tools..."
+if ! xcode-select --print-path &>/dev/null; then
+    echo_msg "Installing Command Line Tools..."
+    xcode-select --install
+else
+    echo_msg "Command Line Tools already installed."
+fi
 
-# Install dependencies
-echo_msg "Installing dependencies..."
+# Upgrade pip, setuptools, and wheel
+echo_msg "Upgrading pip, setuptools, and wheel..."
+pip install --upgrade pip setuptools wheel
+
+# Install Parquet dependencies
+echo_msg "Installing Parquet handling library..."
+pip install fastparquet  # Replace with duckdb if preferred
+
+# Install remaining dependencies
+echo_msg "Installing remaining dependencies..."
 pip install -r requirements.txt
 
 # Make start and restart scripts executable
+echo_msg "Setting permissions for start and restart scripts..."
 chmod 700 start_listener.sh
 chmod 700 restart_listener.sh
 

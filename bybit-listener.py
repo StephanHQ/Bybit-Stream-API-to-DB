@@ -1,222 +1,250 @@
-# bybit_listener/bybit_listener.py
+# bybit_listener.py
 
-import websocket
 import json
-import pandas as pd
-import threading
-import schedule
-import time
 import yaml
-import os
-from datetime import datetime
-import pytz
 import logging
 from logging.handlers import RotatingFileHandler
+import os
+import threading
+from pybit.unified_trading import WebSocket
+from websocket import WebSocketConnectionClosedException
+from time import sleep
+import pandas as pd
+from datetime import datetime
+import signal
+import sys
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from datetime import timezone
 
-# Load configuration
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# Global logger
+logger = None
 
-with open('symbols.json', 'r') as f:
-    symbols_config = json.load(f)
+def load_config(config_path='config.yaml'):
+    """Load YAML configuration file."""
+    with open(config_path, 'r') as file:
+        return yaml.safe_load(file)
 
-# Setup logging with rotation
-log_handler = RotatingFileHandler(
-    config['log_file'],
-    maxBytes=5*1024*1024,  # 5 MB per log file
-    backupCount=5,
-    encoding='utf-8'
-)
+def load_symbols(symbols_path='symbols.json'):
+    """Load JSON symbols file."""
+    with open(symbols_path, 'r') as file:
+        return json.load(file)['symbols']
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[log_handler]
-)
+def setup_logging(log_file):
+    """Set up logging with rotation and console output."""
+    log_dir = os.path.dirname(log_file)
+    os.makedirs(log_dir, exist_ok=True)
 
-class BybitListener:
-    def __init__(self, websocket_url, symbols, storage_path, timezone, max_storage_gb=3):
-        self.websocket_url = websocket_url
-        self.symbols = symbols
-        self.storage_path = storage_path
-        self.timezone = pytz.timezone(timezone)
-        self.data = {}
+    # Rotating File Handler
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 5 MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+
+    # Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)  # Set to INFO to suppress DEBUG logs in console
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+
+    # Logger Configuration
+    logger = logging.getLogger("BybitListener")
+    logger.setLevel(logging.DEBUG)  # Set logger to DEBUG level to capture all logs
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
+class OrderBookBuffer:
+    """Thread-safe buffer for storing incoming order book messages."""
+    def __init__(self):
         self.lock = threading.Lock()
-        self.max_storage_bytes = max_storage_gb * (1024 ** 3)  # Convert GB to bytes
-        self.initialize_data_storage()
+        self.buffer = []
 
-    def initialize_data_storage(self):
-        for symbol in self.symbols:
-            self.data[symbol['name']] = {}
-            for category in symbol['categories']:
-                self.data[symbol['name']][category] = []
+    def append(self, message):
+        with self.lock:
+            self.buffer.append(message)
 
-    def on_message(self, ws, message):
-        try:
-            msg = json.loads(message)
-            
-            # Validate that 'topic' and 'data' exist in the message
-            if 'topic' not in msg or 'data' not in msg:
-                logging.warning("Malformed message received: %s", message)
-                return
-            
-            topic = msg['topic']
-            data = msg['data']
-            
-            # Ensure 'data' is a list
-            if not isinstance(data, list):
-                logging.warning("Invalid data format in message: %s", message)
-                return
-            
-            for symbol in self.symbols:
-                if topic.startswith(symbol['name']):
-                    category = topic.split('.')[1]
-                    if category in symbol['categories']:
-                        with self.lock:
-                            for item in data:
-                                # Ensure each item is a dictionary
-                                if isinstance(item, dict):
-                                    self.data[symbol['name']][category].append(item)
-                                else:
-                                    logging.warning("Invalid data item format: %s", item)
-        except json.JSONDecodeError:
-            logging.error("Failed to decode JSON message: %s", message)
-        except Exception as e:
-            logging.error("Unexpected error in on_message: %s", e)
+    def get_and_clear(self):
+        with self.lock:
+            data = self.buffer.copy()
+            self.buffer.clear()
+        return data
 
-    def on_error(self, ws, error):
-        logging.error("WebSocket error: %s", error)
-
-    def on_close(self, ws, close_status_code, close_msg):
-        logging.info("WebSocket closed with code: %s, message: %s", close_status_code, close_msg)
-
-    def on_open(self, ws):
-        subscribe_args = []
-        for symbol in self.symbols:
-            for category in symbol['categories']:
-                subscribe_args.append(f"{category}.{symbol['name']}")
-        subscribe_message = {
-            "op": "subscribe",
-            "args": subscribe_args
-        }
-        ws.send(json.dumps(subscribe_message))
-        logging.info("Subscribed to %d streams.", len(subscribe_args))
-
-    def run(self):
-        while True:
-            try:
-                ws = websocket.WebSocketApp(
-                    self.websocket_url,
-                    on_open=self.on_open,
-                    on_message=self.on_message,
-                    on_error=self.on_error,
-                    on_close=self.on_close
-                )
-                ws.run_forever()
-            except Exception as e:
-                logging.error("Exception in WebSocket connection: %s", e)
-                time.sleep(5)  # Wait before reconnecting
-
-    def save_data(self):
-        try:
-            with self.lock:
-                current_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
-                for symbol, categories in self.data.items():
-                    for category, records in categories.items():
-                        if records:
-                            df = pd.DataFrame(records)
-                            # Define directory for the symbol and category
-                            dir_path = os.path.join(self.storage_path, symbol, category)
-                            os.makedirs(dir_path, exist_ok=True)
-                            file_path = os.path.join(dir_path, f"{current_date}.parquet")
-                            df.to_parquet(file_path, engine='pyarrow', compression='snappy')
-                            logging.info("Saved %d records to %s", len(records), file_path)
-                            # Clear the data after saving
-                            self.data[symbol][category] = []
-                logging.info("Data saved for date: %s", current_date)
-            
-            # After saving, manage storage to ensure it doesn't exceed the limit
-            self.manage_storage()
-        except Exception as e:
-            logging.error("Error during save_data: %s", e)
-
-    def manage_storage(self):
-        try:
-            total_size = 0
-            parquet_files = []
-
-            # Traverse through all parquet files in storage_path
-            for root, dirs, files in os.walk(self.storage_path):
-                for file in files:
-                    if file.endswith('.parquet'):
-                        file_path = os.path.join(root, file)
-                        try:
-                            file_size = os.path.getsize(file_path)
-                            total_size += file_size
-                            parquet_files.append((file_path, os.path.getmtime(file_path)))
-                        except OSError as e:
-                            logging.error("Error accessing file %s: %s", file_path, e)
-
-            logging.info("Total parquet storage size: %.2f GB", total_size / (1024 ** 3))
-
-            # If total size exceeds the maximum allowed, delete oldest files
-            if total_size > self.max_storage_bytes:
-                # Sort files by modification time (oldest first)
-                parquet_files.sort(key=lambda x: x[1])
-                for file_path, mod_time in parquet_files:
-                    try:
-                        file_size = os.path.getsize(file_path)
-                        os.remove(file_path)
-                        total_size -= file_size
-                        logging.info("Deleted old parquet file: %s to manage storage.", file_path)
-                        if total_size <= self.max_storage_bytes:
-                            break
-                    except OSError as e:
-                        logging.error("Error deleting file %s: %s", file_path, e)
-
-                logging.info("Storage management completed. Current size: %.2f GB", total_size / (1024 ** 3))
-        except Exception as e:
-            logging.error("Error during manage_storage: %s", e)
-
-def schedule_saving(listener, save_time, timezone):
-    def job():
-        listener.save_data()
+def handle_message(message, buffer):
+    """Callback function to handle incoming messages."""
+    # Extract symbol from data or topic
+    if 'data' in message and 'symbol' in message['data']:
+        symbol = message['data']['symbol']
+    elif 'topic' in message and '.' in message['topic']:
+        _, symbol = message['topic'].split('.', 1)
+    else:
+        symbol = 'Unknown'
     
-    schedule_time = save_time
-    schedule.every().day.at(schedule_time).do(job)
-    logging.info("Scheduled daily save at %s %s", schedule_time, timezone)
+    # Add 'symbol' as a top-level key in the message
+    message['symbol'] = symbol
+    
+    # Append the modified message to the buffer
+    buffer.append(message)
+    
+    # Log the buffered message at DEBUG level
+    logger.debug(f"Buffered message for symbol {symbol}: {message}")
 
+def save_buffer_to_parquet(buffer, storage_path):
+    """Save buffered data to Parquet files, one for each symbol."""
+    data = buffer.get_and_clear()
+    if not data:
+        logger.info("No data to save.")
+        return
+
+    # Convert buffer to DataFrame
+    df = pd.DataFrame(data)
+
+    if 'symbol' not in df.columns:
+        logger.error("Data does not contain a 'symbol' column. Cannot save.")
+        return
+
+    # Ensure storage path exists
+    os.makedirs(storage_path, exist_ok=True)
+
+    # Save data for each symbol
+    for symbol, symbol_df in df.groupby('symbol'):
+        if symbol == 'Unknown':
+            logger.warning("Encountered messages with unknown symbols. Skipping.")
+            continue
+
+        # Generate filename with current date
+        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        filename = f"{symbol}_orderbook_{current_date}.parquet"
+        file_path = os.path.join(storage_path, filename)
+
+        try:
+            # Save the symbol-specific DataFrame to Parquet using fastparquet
+            symbol_df.to_parquet(file_path, engine='fastparquet', compression='snappy', index=False)
+            logger.info(f"Saved {len(symbol_df)} records for {symbol} to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save Parquet file for {symbol}: {e}")
+
+def trigger_saver(buffer, storage_path, trigger_file):
+    """Thread function to monitor the trigger file and save data on-demand."""
+    logger.info("Trigger saver thread started. Monitoring for save triggers.")
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        if os.path.exists(trigger_file):
+            logger.info("Trigger detected. Saving buffered data to Parquet.")
+            save_buffer_to_parquet(buffer, storage_path)
+            # Remove the trigger file after processing
+            try:
+                os.remove(trigger_file)
+                logger.info("Trigger file removed after saving.")
+            except Exception as e:
+                logger.error(f"Failed to remove trigger file: {e}")
+        sleep(1)  # Check every second
+
+def scheduled_save(buffer, storage_path):
+    """Scheduled job to save buffer to Parquet."""
+    logger.info("Scheduled save triggered. Saving buffered data to Parquet.")
+    save_buffer_to_parquet(buffer, storage_path)
+
+def signal_handler(sig, frame):
+    """Handle termination signals for graceful shutdown."""
+    logger.info("Termination signal received. Shutting down gracefully...")
+    save_buffer_to_parquet(buffer, storage_path)
+    sys.exit(0)
 
 def main():
-    listener = BybitListener(
-        websocket_url=config['websocket_url'],
-        symbols=symbols_config['symbols'],
-        storage_path=config['parquet_storage_path'],
-        timezone=config['timezone'],
-        max_storage_gb=3  # Set maximum storage to 3 GB
-    )
+    global logger, buffer, storage_path
 
-    # Start WebSocket listener in a separate thread
-    ws_thread = threading.Thread(target=listener.run)
-    ws_thread.daemon = True
-    ws_thread.start()
-    logging.info("WebSocket listener started.")
+    # Load configurations
+    config = load_config()
+    symbols = load_symbols()
 
-    # Schedule data saving
-    scheduler_thread = threading.Thread(target=schedule_saving, args=(listener, config['save_time'], config['timezone']))
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
-    logging.info("Scheduler thread started.")
+    # Set up logging
+    logger = setup_logging(config.get('log_file', './logs/listener.log'))
+    logger.info("Starting Bybit Listener...")
+
+    # Initialize buffer
+    buffer = OrderBookBuffer()
+
+    # Data storage path
+    storage_path = config.get('parquet_storage_path', './parquet_data/')
+
+    # Trigger file path
+    trigger_file = config.get('trigger_file', './save_now.trigger')
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Start trigger saver thread
+    saver_thread = threading.Thread(target=trigger_saver, args=(buffer, storage_path, trigger_file))
+    saver_thread.daemon = True
+    saver_thread.start()
+
+    # Initialize APScheduler for daily save at UTC 00:00
+    scheduler = BackgroundScheduler(timezone='UTC')
+    scheduler.add_job(scheduled_save, CronTrigger(hour=0, minute=0), args=[buffer, storage_path])
+    scheduler.start()
+    logger.info("Scheduler for daily save at UTC 00:00 started.")
+
+    # Group symbols by (testnet, channel_type) to manage multiple WebSocket connections if needed
+    from collections import defaultdict
+    symbol_groups = defaultdict(list)
+    for symbol in symbols:
+        key = (symbol.get('testnet', True), symbol.get('channel_type', 'linear'))
+        symbol_groups[key].append(symbol)
+
+    # Initialize WebSocket connections for each group
+    websocket_threads = []
+
+    for (testnet, channel_type), group_symbols in symbol_groups.items():
+        def websocket_worker(symbols, testnet, channel_type):
+            while True:
+                try:
+                    ws = WebSocket(
+                        testnet=testnet,
+                        channel_type=channel_type,
+                    )
+                    symbols_names = [s['name'] for s in symbols]
+                    logger.info(f"Connected to Bybit WebSocket (Testnet: {testnet}, Channel Type: {channel_type}) for symbols: {[s['name'] for s in symbols]}")
+    
+                    # Subscribe to order book streams for the group symbols
+                    for symbol in symbols:
+                        name = symbol['name']
+                        depth = symbol.get('depth', 50)
+                        logger.info(f"Subscribing to order book for symbol: {name} with depth {depth}")
+                        ws.orderbook_stream(depth, name, lambda msg: handle_message(msg, buffer))
+    
+                    logger.info(f"Subscribed to all order book streams for symbols: {[s['name'] for s in symbols]}")
+    
+                    # Keep the thread alive to continue receiving messages
+                    while True:
+                        sleep(1)
+    
+                except WebSocketConnectionClosedException as e:
+                    logger.error(f"WebSocket connection closed: {e}. Reconnecting in 5 seconds...")
+                    sleep(5)
+                except Exception as e:
+                    logger.error(f"Unexpected error: {e}. Reconnecting in 5 seconds...")
+                    sleep(5)
+    
+        thread = threading.Thread(target=websocket_worker, args=(group_symbols, testnet, channel_type))
+        thread.daemon = True
+        thread.start()
+        websocket_threads.append(thread)
 
     # Keep the main thread alive
     try:
         while True:
-            time.sleep(10)
+            sleep(10)
     except KeyboardInterrupt:
-        logging.info("Shutting down BybitListener.")
+        logger.info("KeyboardInterrupt received. Shutting down gracefully...")
+        save_buffer_to_parquet(buffer, storage_path)
+        scheduler.shutdown()
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

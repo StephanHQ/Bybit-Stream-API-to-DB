@@ -1,8 +1,8 @@
-# bybit_listener/requirements.txt
-
-websocket-client==1.6.1
-pandas==2.1.1
-schedule==1.2.0
-pyyaml==6.0
-pyarrow==13.0.0
-pytz==2023.3
+websocket-client>=1.6.1
+pandas>=2.1.0
+schedule>=1.2.0
+pyyaml>=6.0
+fastparquet>=2024.11.0
+pytz>=2023.3
+pybit>=5.8.0
+apscheduler>=3.11.0
