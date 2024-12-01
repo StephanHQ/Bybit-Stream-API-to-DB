@@ -3,7 +3,7 @@ import json
 import os
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, WebSocketException
-from datetime import datetime
+from datetime import datetime, timezone
 import gzip
 import shutil
 
@@ -37,12 +37,6 @@ TOPICS = {
             "publicTrade"     # Public trades for spot markets
         ]
     },
-    "options": {
-        "BTCUSDT": [
-            "orderbook.1",    # Level 1 orderbook for options
-            "publicTrade"     # Public trades for options
-        ]
-    },
     "inverse": {
         "BTCUSD": [
             "orderbook.1",    # Level 1 orderbook
@@ -72,7 +66,7 @@ def generate_subscription_args(topics_json, channel_type):
 
 # Function to get the current UTC date in YYYY-MM-DD format
 def get_current_utc_date():
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 # Compress old CSV files to .csv.gz
 def compress_old_csv_files(channel_type, utc_date):
@@ -203,7 +197,6 @@ async def main():
     tasks = [
         connect_and_listen("linear"),
         connect_and_listen("spot"),
-        connect_and_listen("options"),
         connect_and_listen("inverse"),
     ]
     await asyncio.gather(*tasks)
