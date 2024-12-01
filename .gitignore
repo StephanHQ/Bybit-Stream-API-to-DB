@@ -1,44 +1,90 @@
-# Byte-compiled Python files
-__pycache__/
+# Byte-compiled files
 *.py[cod]
-*.pyo
-*.pyd
+__pycache__/
 
-# Virtual environment directory
+# Virtual environment
 env/
-*.venv/
+venv/
+ENV/
 .venv/
 
-# Configuration files with sensitive information
-config.yaml
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+
+# PyInstaller
+*.spec
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
 
 # Log files
-logs/
 *.log
 
-# Parquet files
-public_html/parquet_data/
-*.parquet
+# Django stuff:
+*.sqlite3
+db.sqlite3
+
+# Flask instance folder
+instance/
+
+# Static files
+staticfiles/
+static/
 
 # Temporary files
 *.tmp
+*.bak
 *.swp
 *.swo
-*.bak
+*~
+
+# System-specific
 .DS_Store
-
-# Trigger file
-save_now.trigger
-
-# System files
 Thumbs.db
-*.~lock.*
-*.part
 
-# IDE-specific files
+# VS Code settings
 .vscode/
-.idea/
-*.iml
+*.code-workspace
 
-# OS-specific files
-desktop.ini
+# Pycharm settings
+.idea/
+
+# Coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Test output
+junitxml.xml
+test-results.xml
+
+# MyPy cache
+.mypy_cache/
+
+# Linter
+.pylint.d/
+
+# Pipenv
+Pipfile
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# Pyre
+.pyre/
+
+# Logs
+logs/
+
+# Bybit stream data folder
+bybit_stream_data/

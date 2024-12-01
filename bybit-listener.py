@@ -1,269 +1,215 @@
+import asyncio
 import json
-import yaml
-import logging
-from logging.handlers import RotatingFileHandler
 import os
-import threading
-from pybit.unified_trading import WebSocket
-from websocket import WebSocketConnectionClosedException
-from time import sleep
-import pandas as pd
-from datetime import datetime, timezone
-import signal
-import sys
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+import websockets
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, WebSocketException
+from datetime import datetime
+import gzip
+import shutil
 
-# Global logger
-logger = None
+# Directories for storing CSV files and logs
+CSV_FOLDER = "bybit_stream_data"
+LOGS_FOLDER = "logs"
+os.makedirs(CSV_FOLDER, exist_ok=True)
+os.makedirs(LOGS_FOLDER, exist_ok=True)
 
-def load_config(config_path='config.yaml'):
-    """Load YAML configuration file."""
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
+LOG_FILE_BASE = os.path.join(LOGS_FOLDER, "logs")
+LOG_FILE_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
 
-def load_symbols(symbols_path='symbols.json'):
-    """Load JSON symbols file."""
-    with open(symbols_path, 'r') as file:
-        return json.load(file)['symbols']
+# Topics structured as JSON with channel_type
+TOPICS = {
+    "linear": {
+        "BTCUSDT": [
+            "orderbook.1",    # Level 1 orderbook
+            "publicTrade",    # Public trades
+            "kline.5",        # 5-minute Kline (candlestick) data
+            "liquidation",    # Liquidation updates
+            "tickers"         # Price ticker updates
+        ],
+        "ETHUSDT": [
+            "orderbook.1",    # Level 1 orderbook
+            "publicTrade"     # Public trades
+        ]
+    },
+    "spot": {
+        "BTCUSDT": [
+            "tickers",        # Ticker updates for spot markets
+            "publicTrade"     # Public trades for spot markets
+        ]
+    },
+    "options": {
+        "BTCUSDT": [
+            "orderbook.1",    # Level 1 orderbook for options
+            "publicTrade"     # Public trades for options
+        ]
+    },
+    "inverse": {
+        "BTCUSD": [
+            "orderbook.1",    # Level 1 orderbook
+            "publicTrade",    # Public trades
+            "kline.1",        # 1-minute Kline (candlestick) data
+            "liquidation"     # Liquidation updates
+        ]
+    }
+}
 
-def setup_logging(log_file):
-    """Set up logging with rotation and console output."""
-    log_dir = os.path.dirname(log_file)
-    os.makedirs(log_dir, exist_ok=True)
+# WebSocket URLs for each channel_type
+CHANNEL_URLS = {
+    "linear": "wss://stream.bybit.com/v5/public/linear",
+    "spot": "wss://stream.bybit.com/v5/public/spot",
+    "options": "wss://stream.bybit.com/v5/public/option",
+    "inverse": "wss://stream.bybit.com/v5/public/inverse"
+}
 
-    # Rotating File Handler
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
+# Flatten topics for a specific channel type
+def generate_subscription_args(topics_json, channel_type):
+    args = []
+    if channel_type in topics_json:
+        for symbol, topic_list in topics_json[channel_type].items():
+            for topic in topic_list:
+                args.append(f"{topic}.{symbol}")
+    return args
 
-    # Console Handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)  # Set to INFO to suppress DEBUG logs in console
-    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
+# Function to get the current UTC date in YYYY-MM-DD format
+def get_current_utc_date():
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
-    # Logger Configuration
-    logger = logging.getLogger("BybitListener")
-    logger.setLevel(logging.DEBUG)  # Set logger to DEBUG level to capture all logs
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+# Compress old CSV files to .csv.gz
+def compress_old_csv_files(channel_type, utc_date):
+    channel_folder = os.path.join(CSV_FOLDER, channel_type)
+    for root, _, files in os.walk(channel_folder):
+        for file in files:
+            if file.endswith(".csv") and not file.startswith(utc_date):
+                csv_path = os.path.join(root, file)
+                gz_path = f"{csv_path}.gz"
 
-    return logger
+                # Compress the file
+                with open(csv_path, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                
+                # Remove the original CSV file
+                os.remove(csv_path)
 
-class OrderBookBuffer:
-    """Thread-safe buffer for storing incoming order book messages."""
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.buffer = []
+# Function to save messages to CSV in structured subdirectories
+def save_message(channel_type, topic, message):
+    # Get current UTC date
+    utc_date = get_current_utc_date()
 
-    def append(self, message):
-        with self.lock:
-            self.buffer.append(message)
+    # Compress old files if necessary
+    compress_old_csv_files(channel_type, utc_date)
 
-    def get_and_clear(self):
-        with self.lock:
-            data = self.buffer.copy()
-            self.buffer.clear()
-        return data
+    # Create subdirectory for channel_type
+    channel_folder = os.path.join(CSV_FOLDER, channel_type)
+    os.makedirs(channel_folder, exist_ok=True)
 
-def handle_message(message, buffer, symbols_map):
-    """Callback function to handle incoming messages."""
-    # Log the raw message
-    logger.debug(f"Raw message received: {message}")
+    # Create subdirectory for topic within the channel_type folder
+    topic_folder = os.path.join(channel_folder, topic.split(".")[0])  # Use only the base topic
+    os.makedirs(topic_folder, exist_ok=True)
 
-    # Extract symbol from the message
-    if 'data' in message and 'symbol' in message['data']:
-        symbol = message['data']['symbol']
-    elif 'topic' in message and '.' in message['topic']:
-        _, symbol = message['topic'].split('.', 1)
-    else:
-        symbol = 'Unknown'
+    # Create CSV file path with UTC date in the name
+    csv_file = os.path.join(topic_folder, f"{utc_date}_{topic}.csv")
 
-    logger.debug(f"Extracted symbol before normalization: {symbol}")
+    # Save the message
+    with open(csv_file, mode="a", newline="") as file:
+        file.write(json.dumps(message) + "\n")
 
-    # Remove '50.' prefix if present
-    if symbol.startswith("50."):
-        symbol = symbol[3:]
-        logger.debug(f"Symbol after stripping prefix: {symbol}")
+# Function to manage log rotation and save logs
+def log_unknown_message(message):
+    current_log_file = f"{LOG_FILE_BASE}.txt"
 
-    # Get channel_type and depth from symbols_map
-    channel_type = symbols_map.get(symbol, {}).get('channel_type', 'Unknown')
-    depth = symbols_map.get(symbol, {}).get('depth', 'Unknown')
+    # Check log file size and rotate if needed
+    if os.path.exists(current_log_file) and os.path.getsize(current_log_file) >= LOG_FILE_SIZE_LIMIT:
+        rotate_logs()
 
-    logger.debug(f"Channel type: {channel_type}, Depth: {depth}")
+    # Write message to the current log file
+    with open(current_log_file, mode="a", newline="") as log_file:
+        log_file.write(json.dumps(message) + "\n")
 
-    # Add `symbol`, `channel_type`, and `depth` to the message
-    message['symbol'] = symbol
-    message['channel_type'] = channel_type
-    message['depth'] = depth
+# Function to rotate logs
+def rotate_logs():
+    for i in range(4, 0, -1):  # Keep 5 log files: logs.txt, logs.1.txt, ..., logs.4.txt
+        old_log = f"{LOG_FILE_BASE}.{i}.txt"
+        new_log = f"{LOG_FILE_BASE}.{i + 1}.txt"
+        if os.path.exists(old_log):
+            os.rename(old_log, new_log)
 
-    # Append the modified message to the buffer
-    buffer.append(message)
+    # Rename the current log file to logs.1.txt
+    current_log_file = f"{LOG_FILE_BASE}.txt"
+    rotated_log_file = f"{LOG_FILE_BASE}.1.txt"
+    if os.path.exists(current_log_file):
+        os.rename(current_log_file, rotated_log_file)
 
-    # Log the buffered message at DEBUG level
-    logger.debug(f"Buffered message for symbol {symbol} (channel_type: {channel_type}, depth: {depth}): {message}")
+# WebSocket connection handler for a specific channel type
+async def connect_and_listen(channel_type):
+    url = CHANNEL_URLS[channel_type]
+    subscription_args = generate_subscription_args(TOPICS, channel_type)
 
-def save_buffer_to_parquet(buffer, storage_path, symbols_map):
-    """Save buffered data to Parquet files with an enhanced folder structure."""
-    data = buffer.get_and_clear()
-    if not data:
-        logger.info("No data to save.")
-        return
-
-    # Convert buffer to DataFrame
-    df = pd.DataFrame(data)
-
-    if 'symbol' not in df.columns or 'channel_type' not in df.columns or 'depth' not in df.columns:
-        logger.error("Data does not contain required columns ('symbol', 'channel_type', 'depth'). Cannot save.")
-        return
-
-    # Ensure storage path exists
-    os.makedirs(storage_path, exist_ok=True)
-
-    # Save data for each combination of symbol and channel_type
-    for (symbol, channel_type, depth), group_df in df.groupby(['symbol', 'channel_type', 'depth']):
-        if symbol == 'Unknown' or channel_type == 'Unknown':
-            logger.warning("Encountered messages with unknown symbols or channel types. Skipping.")
-            continue
-
-        # Create nested folder structure
-        folder_path = os.path.join(storage_path, symbol, channel_type)
-        os.makedirs(folder_path, exist_ok=True)
-
-        # Generate filename with additional parameters
-        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        filename = f"{symbol}_{channel_type}_{current_date}_orderbook_depth-{depth}.parquet"
-        file_path = os.path.join(folder_path, filename)
-
-        try:
-            # Check if file exists
-            if os.path.exists(file_path):
-                # Read existing data
-                existing_df = pd.read_parquet(file_path, engine='fastparquet')
-                # Concatenate new data
-                combined_df = pd.concat([existing_df, group_df], ignore_index=True)
-                # Save back to Parquet
-                combined_df.to_parquet(file_path, engine='fastparquet', compression='snappy')
-                logger.info(f"Appended {len(group_df)} records for {symbol}/{channel_type} to {file_path}")
-            else:
-                # Save the symbol-specific DataFrame to Parquet
-                group_df.to_parquet(file_path, engine='fastparquet', compression='snappy')
-                logger.info(f"Saved {len(group_df)} records for {symbol}/{channel_type} to {file_path}")
-        except Exception as e:
-            logger.error(f"Failed to save Parquet file for {symbol}/{channel_type}: {e}")
-
-def trigger_saver(buffer, storage_path, trigger_file, symbols_map):
-    """Thread function to monitor the trigger file and save data on-demand."""
-    logger.info("Trigger saver thread started. Monitoring for save triggers.")
-    while True:
-        if os.path.exists(trigger_file):
-            logger.info("Trigger detected. Saving buffered data to Parquet.")
-            save_buffer_to_parquet(buffer, storage_path, symbols_map)
-            # Remove the trigger file after processing
-            try:
-                os.remove(trigger_file)
-                logger.info("Trigger file removed after saving.")
-            except Exception as e:
-                logger.error(f"Failed to remove trigger file: {e}")
-        sleep(1)  # Check every second
-
-def scheduled_save(buffer, storage_path, symbols_map):
-    """Scheduled job to save buffer to Parquet."""
-    logger.info("Scheduled save triggered. Saving buffered data to Parquet.")
-    save_buffer_to_parquet(buffer, storage_path, symbols_map)
-
-def signal_handler(sig, frame):
-    """Handle termination signals for graceful shutdown."""
-    logger.info("Termination signal received. Shutting down gracefully...")
-    save_buffer_to_parquet(buffer, storage_path, symbols_map)
-    scheduler.shutdown()
-    sys.exit(0)
-
-def websocket_worker(symbol, buffer, symbols_map):
-    """WebSocket worker to handle WebSocket connections."""
     while True:
         try:
-            ws = WebSocket(testnet=symbol.get('testnet', True), channel_type=symbol['channel_type'])
-            ws.orderbook_stream(symbol['depth'], symbol['name'], lambda msg: handle_message(msg, buffer, symbols_map))
-            logger.info(f"Subscribed to {symbol['name']} (channel_type: {symbol['channel_type']})")
-            while True:
-                sleep(1)
-        except WebSocketConnectionClosedException as e:
-            logger.error(f"WebSocket connection closed: {e}. Reconnecting in 5 seconds...")
-            sleep(5)
+            async with websockets.connect(
+                url,
+                ping_interval=20,  # Send pings every 20 seconds
+                ping_timeout=10,   # Wait up to 10 seconds for a pong
+                close_timeout=5    # Close timeout
+            ) as websocket:
+                print(f"Connected to {channel_type} channel WebSocket.")
+
+                # Subscribe to topics
+                await websocket.send(json.dumps({
+                    "op": "subscribe",
+                    "args": subscription_args,
+                }))
+
+                # Receive confirmation
+                response = await websocket.recv()
+                print(f"Subscription Response for {channel_type}: {response}")
+
+                # Keep the connection alive
+                async def send_heartbeat():
+                    while True:
+                        try:
+                            await asyncio.sleep(20)
+                            await websocket.send(json.dumps({"op": "ping"}))
+                            print(f"Sent heartbeat for {channel_type}.")
+                        except WebSocketException as e:
+                            print(f"Heartbeat failed for {channel_type}: {e}")
+                            break  # Exit the loop if sending fails
+
+                # Start heartbeat in a separate task
+                heartbeat_task = asyncio.create_task(send_heartbeat())
+
+                # Listen for messages
+                async for message in websocket:
+                    data = json.loads(message)
+                    topic = data.get("topic", "unknown")
+
+                    if topic == "unknown":  # Log unknown messages
+                        log_unknown_message(data)
+                    else:
+                        save_message(channel_type, topic, data)
+
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            print(f"Connection lost on {channel_type} channel: {e}. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)  # Reconnect after a delay
+        except WebSocketException as e:
+            print(f"WebSocket error on {channel_type} channel: {e}. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)  # Reconnect after a delay
         except Exception as e:
-            logger.error(f"Unexpected error: {e}. Reconnecting in 5 seconds...")
-            sleep(5)
+            print(f"Unexpected error on {channel_type} channel: {e}. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)  # Reconnect after a delay
 
-def main():
-    global logger, buffer, storage_path, symbols_map, scheduler
-
-    # Load configurations
-    config = load_config()
-    symbols = load_symbols()
-
-    # Map symbols to their configurations
-    symbols_map = {s['name']: s for s in symbols}
-
-    # Set up logging
-    logger = setup_logging(config.get('log_file', './logs/listener.log'))
-    logger.info("Starting Bybit Listener...")
-
-    # Initialize buffer
-    buffer = OrderBookBuffer()
-
-    # Data storage path
-    storage_path = config.get('parquet_storage_path', './parquet_data/')
-
-    # Trigger file path
-    trigger_file = config.get('trigger_file', './save_now.trigger')
-
-    # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Start trigger saver thread
-    saver_thread = threading.Thread(target=trigger_saver, args=(buffer, storage_path, trigger_file, symbols_map))
-    saver_thread.daemon = True
-    saver_thread.start()
-
-    # Initialize APScheduler for daily save at UTC 00:00
-    scheduler = BackgroundScheduler(timezone='UTC')
-    scheduler.add_job(
-        scheduled_save,
-        CronTrigger(hour=0, minute=0),
-        args=[buffer, storage_path, symbols_map]
-    )
-    scheduler.start()
-    logger.info("Scheduler for daily save at UTC 00:00 started.")
-
-    # Initialize WebSocket connections
-    websocket_threads = []
-
-    for symbol in symbols:
-        thread = threading.Thread(
-            target=websocket_worker,
-            args=(symbol, buffer, symbols_map)
-        )
-        thread.daemon = True
-        thread.start()
-        websocket_threads.append(thread)
-
-    # Keep the main thread alive
-    try:
-        while True:
-            sleep(10)
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received. Shutting down gracefully...")
-        save_buffer_to_parquet(buffer, storage_path, symbols_map)
-        scheduler.shutdown()
-        sys.exit(0)
+# Run the WebSocket client for all channel types
+async def main():
+    tasks = [
+        connect_and_listen("linear"),
+        connect_and_listen("spot"),
+        connect_and_listen("options"),
+        connect_and_listen("inverse"),
+    ]
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("WebSocket client stopped.")

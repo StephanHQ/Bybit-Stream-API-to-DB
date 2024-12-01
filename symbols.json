@@ -1,39 +1,45 @@
 {
     "symbols": [
-        {
-            "name": "BTCUSDT",
-            "channel_type": "linear",
-            "testnet": true,
-            "subscribe_to": ["orderbook"],
+      {
+        "name": "BTCUSDT",
+        "channel_type": "linear",
+        "testnet": true,
+        "subscribe_to": [
+          {
+            "stream": "orderbook",
             "depth": 50
-        },
-        {
-            "name": "ETHUSDT",
-            "channel_type": "linear",
-            "testnet": true,
-            "subscribe_to": ["orderbook"],
+          },
+          {
+            "stream": "trade"
+          },
+          {
+            "stream": "ticker"
+          },
+          {
+            "stream": "kline",
+            "interval": 5
+          },
+          {
+            "stream": "liquidation"
+          }
+        ]
+      },
+      {
+        "name": "ETHUSDT",
+        "channel_type": "linear",
+        "testnet": true,
+        "subscribe_to": [
+          {
+            "stream": "orderbook",
             "depth": 50
-        },
-        {
-            "name": "XRPUSDT",
-            "channel_type": "linear",
-            "testnet": true,
-            "subscribe_to": ["orderbook"],
-            "depth": 50
-        },
-        {
-            "name": "LTCUSDT",
-            "channel_type": "linear",
-            "testnet": true,
-            "subscribe_to": ["orderbook"],
-            "depth": 50
-        },
-        {
-            "name": "BCHUSDT",
-            "channel_type": "linear",
-            "testnet": true,
-            "subscribe_to": ["orderbook"],
-            "depth": 50
-        }
+          },
+          {
+            "stream": "trade"
+          },
+          {
+            "stream": "ticker"
+          }
+        ]
+      }
     ]
-}
+  }
