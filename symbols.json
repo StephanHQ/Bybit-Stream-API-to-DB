@@ -1,45 +1,31 @@
 {
-    "symbols": [
-      {
-        "name": "BTCUSDT",
-        "channel_type": "linear",
-        "testnet": true,
-        "subscribe_to": [
-          {
-            "stream": "orderbook",
-            "depth": 50
-          },
-          {
-            "stream": "trade"
-          },
-          {
-            "stream": "ticker"
-          },
-          {
-            "stream": "kline",
-            "interval": 5
-          },
-          {
-            "stream": "liquidation"
-          }
+    "linear": {
+        "BTCUSDT": [
+            "orderbook.500",
+            "publicTrade",
+            "liquidation",
+            "tickers"
+        ],
+        "ETHUSDT": [
+            "orderbook.500",
+            "publicTrade",
+            "liquidation",
+            "tickers"
         ]
-      },
-      {
-        "name": "ETHUSDT",
-        "channel_type": "linear",
-        "testnet": true,
-        "subscribe_to": [
-          {
-            "stream": "orderbook",
-            "depth": 50
-          },
-          {
-            "stream": "trade"
-          },
-          {
-            "stream": "ticker"
-          }
+    },
+    "spot": {
+        "BTCUSDT": [
+            "orderbook.200",
+            "tickers",
+            "publicTrade"
         ]
-      }
-    ]
-  }
+    },
+    "inverse": {
+        "BTCUSD": [
+            "orderbook.500",
+            "publicTrade",
+            "kline.1",
+            "liquidation"
+        ]
+    }
+}
