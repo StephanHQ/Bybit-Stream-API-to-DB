@@ -7,6 +7,7 @@ set -e
 VENV_DIR="env"
 LOG_DIR="./logs"
 LOG_FILE="$LOG_DIR/listener.log"
+STORAGE_PATH="./storage"  # Defined STORAGE_PATH
 
 # Function to print messages with timestamp
 echo_msg() {
