@@ -1,9 +1,9 @@
 ---
 deployment:
   tasks:
-    - set -x  # Enable debugging to print commands before execution
-    - echo "Detected deployment path: $GIT_WORK_TREE"
-    - export DEPLOYPATH=$GIT_WORK_TREE
+    - set -x  # Enable debugging
+    - export DEPLOYPATH=$(pwd)
+    - echo "Using DEPLOYPATH: $DEPLOYPATH"
     - mkdir -p $DEPLOYPATH
     - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
     - cd $DEPLOYPATH
