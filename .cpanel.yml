@@ -1,12 +1,11 @@
 ---
 deployment:
   tasks:
-    - set -x  # Enable debugging
-    - export DEPLOYPATH=$(pwd)
-    - echo "Using DEPLOYPATH: $DEPLOYPATH"
-    - mkdir -p $DEPLOYPATH
-    - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
-    - cd $DEPLOYPATH
+    - set -x  # Enable debugging to print commands before execution
+    - echo "Using Repository Path: $(pwd)"  # Print the repository path dynamically detected
+    - mkdir -p $(pwd)  # Ensure the directory exists (usually unnecessary because cPanel ensures this)
+    - rsync -avz . $(pwd) --exclude '.git' --exclude '.env' --exclude '__pycache__'
+    - cd $(pwd)  # Change to the detected repository path
     - python3 -m venv env
     - source env/bin/activate
     - pip install --upgrade pip setuptools wheel
