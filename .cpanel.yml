@@ -2,10 +2,11 @@
 deployment:
   tasks:
     - set -x  # Enable debugging to print commands before execution
-    - echo "Using Repository Path: $(pwd)"  # Print the repository path dynamically detected
-    - mkdir -p $(pwd)  # Ensure the directory exists (usually unnecessary because cPanel ensures this)
-    - rsync -avz . $(pwd) --exclude '.git' --exclude '.env' --exclude '__pycache__'
-    - cd $(pwd)  # Change to the detected repository path
+    - export REPO_PATH=/home/osgawcom/ichhaberecht.com/bybit_stream_data
+    - echo "Using hardcoded Repository Path: $REPO_PATH"
+    - mkdir -p $REPO_PATH  # Ensure the repository path exists
+    - rsync -avz . $REPO_PATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
+    - cd $REPO_PATH  # Navigate to the hardcoded repository path
     - python3 -m venv env
     - source env/bin/activate
     - pip install --upgrade pip setuptools wheel
