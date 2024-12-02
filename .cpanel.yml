@@ -1,9 +1,15 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=$GIT_WORK_TREE  # Automatically uses the path defined in cPanel Git settings
+    - set -x  # Enable debugging to print commands before execution
+    - echo "Detected deployment path: $GIT_WORK_TREE"
+    - export DEPLOYPATH=$GIT_WORK_TREE
     - mkdir -p $DEPLOYPATH
     - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
     - cd $DEPLOYPATH
-    - chmod +x setup.sh
-    - ./setup.sh >> deployment_log.log 2>> deployment_errors.log
+    - python3 -m venv env
+    - source env/bin/activate
+    - pip install --upgrade pip setuptools wheel
+    - pip install -r requirements.txt
+    - chmod +x start_listener.sh
+    - ./start_listener.sh
