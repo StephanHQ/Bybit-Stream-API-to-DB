@@ -1,49 +1,13 @@
-version: 1
-
-setup:
-  commands:
-    # 1. Ensure Python 3 and pip are installed
-    - python3 --version
-    - pip3 --version
-
-    # 2. Create a virtual environment if it doesn't exist
-    - |
-      if [ ! -d "env" ]; then
-        echo "Creating virtual environment..."
-        python3 -m venv env
-      else
-        echo "Virtual environment already exists."
-      fi
-
-    # 3. Activate the virtual environment
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=$HOME/public_html/bybit_listener/
+    - mkdir -p $DEPLOYPATH
+    - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
+    - cd $DEPLOYPATH
+    - python3 -m venv env
     - source env/bin/activate
-
-    # 4. Upgrade pip within the virtual environment
-    - pip install --upgrade pip
-
-    # 5. Install Python dependencies from requirements.txt
+    - pip install --upgrade pip setuptools wheel
     - pip install -r requirements.txt
-
-    # 6. Make shell scripts executable
     - chmod +x start_listener.sh
-    - chmod +x restart_listener.sh
-    - chmod +x setup.sh
-
-    # 7. Run the setup script to create necessary directories and configurations
-    - ./setup.sh
-
-post_deploy:
-  commands:
-    # 8. Add a cron job to start the listener at system reboot
-    - |
-      # Check if the cron job already exists to prevent duplicates
-      if ! crontab -l | grep -q "@reboot $(pwd)/start_listener.sh"; then
-        (crontab -l 2>/dev/null; echo "@reboot $(pwd)/start_listener.sh") | crontab -
-        echo "Cron job for @reboot added."
-      else
-        echo "Cron job for @reboot already exists."
-      fi
-
-    # 9. Start the listener immediately using nohup to run it in the background
-    - nohup ./start_listener.sh > ./logs/listener.log 2>&1 &
-    - echo "Bybit Listener started in the background."
+    - ./start_listener.sh
