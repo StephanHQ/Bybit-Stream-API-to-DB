@@ -1,13 +1,9 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=$HOME/public_html/bybit_listener/
+    - export DEPLOYPATH=$GIT_WORK_TREE  # Automatically uses the path defined in cPanel Git settings
     - mkdir -p $DEPLOYPATH
     - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
     - cd $DEPLOYPATH
-    - python3 -m venv env
-    - source env/bin/activate
-    - pip install --upgrade pip setuptools wheel
-    - pip install -r requirements.txt
-    - chmod +x start_listener.sh
-    - ./start_listener.sh
+    - chmod +x setup.sh
+    - ./setup.sh >> deployment_log.log 2>> deployment_errors.log
