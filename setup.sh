@@ -5,7 +5,6 @@ set -e
 
 # Variables (modify these as per your environment)
 VENV_DIR="env"
-STORAGE_PATH="./parquet_data"
 LOG_DIR="./logs"
 LOG_FILE="$LOG_DIR/listener.log"
 
@@ -49,10 +48,6 @@ fi
 # Upgrade pip, setuptools, and wheel
 echo_msg "Upgrading pip, setuptools, and wheel..."
 pip install --upgrade pip setuptools wheel
-
-# Install Parquet dependencies
-echo_msg "Installing Parquet handling library..."
-pip install fastparquet  # Replace with duckdb if preferred
 
 # Install remaining dependencies
 echo_msg "Installing remaining dependencies..."

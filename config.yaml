@@ -6,8 +6,5 @@ log_file: "./logs/listener.log"
 # Trigger Settings
 trigger_file: "./save_now.trigger"  # Path to the trigger file for on-demand saving
 
-# Data Storage Settings
-parquet_storage_path: "./parquet_data/"  # Directory to store Parquet files
-
 # Scheduling Settings
 save_time_utc: "00:00"  # Time to trigger daily save in UTC (HH:MM format)

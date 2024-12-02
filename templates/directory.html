@@ -1,0 +1,96 @@
+<!-- templates/directory.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bybit Stream Data Browser</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .breadcrumb {
+            margin-bottom: 20px;
+        }
+        .breadcrumb a {
+            text-decoration: none;
+            color: #3498db;
+        }
+        .breadcrumb span {
+            margin: 0 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f4f4f4;
+            text-align: left;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        a.button {
+            padding: 6px 12px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        a.button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Bybit Stream Data Browser</h1>
+    <div class="breadcrumb">
+        {% if current_path %}
+            <a href="/">Home</a>
+            {% for part in current_path.split(path_separator) %}
+                {% if not loop.first %}
+                    <span>/</span>
+                {% endif %}
+                <a href="{{ url_for('list_directory', subpath=path_separator.join(current_path.split(path_separator)[:loop.index])) }}">{{ part }}</a>
+            {% endfor %}
+        {% else %}
+            <span>Home</span>
+        {% endif %}
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Last Modified</th>
+                <th>Download</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for dir in dirs %}
+            <tr>
+                <td><a href="{{ url_for('list_directory', subpath=(current_path + '/' if current_path else '') + dir) }}">{{ dir }}/</a></td>
+                <td>Directory</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+            </tr>
+            {% endfor %}
+            {% for file in files %}
+            <tr>
+                <td>{{ file.name }}</td>
+                <td>File</td>
+                <td>{{ file.size }}</td>
+                <td>{{ file.modified }}</td>
+                <td><a class="button" href="{{ url_for('download_file', filepath=(current_path + '/' if current_path else '') + file.name) }}">Download</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
