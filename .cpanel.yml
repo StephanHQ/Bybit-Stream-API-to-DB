@@ -1,15 +1,10 @@
 ---
-deployment:
-  tasks:
-    - set -x  # Enable debugging to print commands before execution
-    - export REPO_PATH=/home/osgawcom/ichhaberecht.com/bybit_stream_data
-    - echo "Using hardcoded Repository Path: $REPO_PATH"
-    - mkdir -p $REPO_PATH  # Ensure the repository path exists
-    - rsync -avz . $REPO_PATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
-    - cd $REPO_PATH  # Navigate to the hardcoded repository path
-    - python3 -m venv env
-    - source env/bin/activate
-    - pip install --upgrade pip setuptools wheel
-    - pip install -r requirements.txt
-    - chmod +x start_listener.sh
-    - ./start_listener.sh
+  deployment:
+    tasks:
+      - export DEPLOYPATH=/home/osgawcom/ichhaberecht.com/bybit_stream_data
+      - mkdir -p $DEPLOYPATH
+      - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
+      - cd $DEPLOYPATH
+      - chmod +x setup.sh
+      - ./setup.sh >> deployment_log.log 2>> deployment_errors.log
+  
