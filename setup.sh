@@ -16,12 +16,28 @@ echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Function to set permissions
+set_permissions() {
+    local target="$1"
+    local permissions="$2"
+
+    if [ -e "$target" ]; then
+        chmod "$permissions" "$target"
+        echo_msg "Set permissions $permissions on $target"
+    else
+        echo_msg "Target $target does not exist, skipping permission setting."
+    fi
+}
+
 echo_msg "Starting setup..."
 
 # Create necessary directories with restrictive permissions
 echo_msg "Creating directories..."
-mkdir -p "$STORAGE_PATH" && chmod 700 "$STORAGE_PATH"
-mkdir -p "$LOG_DIR" && chmod 700 "$LOG_DIR"
+mkdir -p "$STORAGE_PATH"
+set_permissions "$STORAGE_PATH" 700
+
+mkdir -p "$LOG_DIR"
+set_permissions "$LOG_DIR" 700
 
 # Navigate to the project directory
 cd "$PROJECT_DIR"
@@ -29,7 +45,10 @@ cd "$PROJECT_DIR"
 # Create virtual environment if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
     echo_msg "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
+    python3 -m venv "$VENV_DIR" || {
+        echo_msg "Virtual environment creation failed."
+        exit 1
+    }
     echo_msg "Virtual environment created."
 else
     echo_msg "Virtual environment already exists."
@@ -45,11 +64,15 @@ pip install --upgrade pip setuptools wheel
 
 # Install remaining dependencies
 echo_msg "Installing remaining dependencies..."
-pip install -r "$PROJECT_DIR/requirements.txt"
+if [ -f "$PROJECT_DIR/requirements.txt" ]; then
+    pip install -r "$PROJECT_DIR/requirements.txt"
+else
+    echo_msg "No requirements.txt found, skipping dependency installation."
+fi
 
-# Make start and restart scripts executable
+# Set permissions for start and restart scripts
 echo_msg "Setting permissions for start and restart scripts..."
-chmod 700 "$PROJECT_DIR/start_listener.sh"
-chmod 700 "$PROJECT_DIR/restart_listener.sh"
+set_permissions "$PROJECT_DIR/start_listener.sh" 700
+set_permissions "$PROJECT_DIR/restart_listener.sh" 700
 
 echo_msg "Setup completed successfully."

@@ -1,5 +1,0 @@
-# passenger_wsgi.py
-from bybit_listener import app as application
-
-if __name__ == "__main__":
-    application.run()
