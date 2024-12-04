@@ -10,7 +10,10 @@ VENV_DIR="$PROJECT_DIR/env"
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/listener.log"
 STORAGE_PATH="$PROJECT_DIR/storage"
-REQUIRED_PYTHON_VERSION="3.8"
+REQUIRED_PYTHON_VERSION="3.12"
+PYTHON_INSTALL_DIR="/usr/local"
+PYTHON_SOURCE_URL="https://www.python.org/ftp/python/3.12.0/Python-3.12.0.tgz"
+PYTHON_SOURCE_DIR="/tmp/python3.12"
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -23,9 +26,29 @@ check_python_version() {
     python_version=$(python3 --version 2>&1 | awk '{print $2}')
     if [[ ! $python_version =~ $REQUIRED_PYTHON_VERSION ]]; then
         echo_msg "Python version $python_version is not compatible. Required: $REQUIRED_PYTHON_VERSION or higher."
-        echo_msg "Please upgrade Python before proceeding."
-        exit 1
+        echo_msg "Installing Python $REQUIRED_PYTHON_VERSION..."
+        install_python
     fi
+}
+
+# Function to install Python 3.12
+install_python() {
+    echo_msg "Installing dependencies for Python build..."
+    sudo yum groupinstall -y "Development Tools"
+    sudo yum install -y gcc gcc-c++ zlib-devel bzip2 bzip2-devel readline-devel sqlite sqlite-devel openssl-devel xz xz-devel libffi-devel wget
+
+    echo_msg "Downloading Python $REQUIRED_PYTHON_VERSION source..."
+    mkdir -p $PYTHON_SOURCE_DIR
+    wget -O /tmp/Python.tgz $PYTHON_SOURCE_URL
+    tar -xzf /tmp/Python.tgz -C $PYTHON_SOURCE_DIR --strip-components=1
+
+    echo_msg "Building and installing Python $REQUIRED_PYTHON_VERSION..."
+    cd $PYTHON_SOURCE_DIR
+    ./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR
+    make -j$(nproc)
+    sudo make altinstall
+
+    echo_msg "Python $REQUIRED_PYTHON_VERSION installed successfully."
 }
 
 # Function to set permissions
@@ -43,7 +66,7 @@ set_permissions() {
 
 echo_msg "Starting setup..."
 
-# Check Python version
+# Check and install Python version
 check_python_version
 
 # Create necessary directories with restrictive permissions
@@ -60,13 +83,9 @@ cd "$PROJECT_DIR"
 # Create or recreate virtual environment
 if [ ! -d "$VENV_DIR" ]; then
     echo_msg "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR" || {
-        echo_msg "Virtual environment creation failed. Attempting to upgrade pip and setuptools globally."
-        sudo python3 -m ensurepip --upgrade || {
-            echo_msg "ensurepip failed. Please ensure Python installation is complete."
-            exit 1
-        }
-        python3 -m venv "$VENV_DIR"
+    python3.12 -m venv "$VENV_DIR" || {
+        echo_msg "Virtual environment creation failed. Please ensure Python installation is complete."
+        exit 1
     }
     echo_msg "Virtual environment created."
 else
