@@ -63,9 +63,14 @@ install_python() {
 
     echo_msg "Building and installing Python $REQUIRED_PYTHON_VERSION..."
     cd $PYTHON_SOURCE_DIR
-    ./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR
-    make -j$(nproc)
-    $SUDO make altinstall || echo_msg "Failed to install Python."
+
+    # Fix permissions for the source directory
+    chmod -R u+x $PYTHON_SOURCE_DIR
+    chmod -R u+r $PYTHON_SOURCE_DIR
+
+    ./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR || { echo_msg "Configure failed."; exit 1; }
+    make -j$(nproc) || { echo_msg "Make failed."; exit 1; }
+    $SUDO make altinstall || { echo_msg "Altinstall failed."; exit 1; }
 
     echo_msg "Python $REQUIRED_PYTHON_VERSION installed successfully."
 }
