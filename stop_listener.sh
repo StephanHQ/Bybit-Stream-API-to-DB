@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script name
-SCRIPT="bybit-listener.py"
+SCRIPT="bybit_listener.py"
 
 # Function to print messages with timestamp
 echo_msg() {

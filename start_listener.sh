@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Variables
-SCRIPT="bybit-listener.py"
+SCRIPT="bybit_websocket_listener.py"  # Updated to the WebSocket listener script
 LOG_FILE="$(pwd)/logs/listener.log"
 VENV_DIR="$(pwd)/env"
 PROJECT_DIR="$(pwd)"
@@ -11,7 +11,7 @@ echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-echo_msg "Starting Bybit Listener..."
+echo_msg "Starting Bybit WebSocket Listener..."
 
 # Activate virtual environment
 if [ -f "$VENV_DIR/bin/activate" ]; then
@@ -33,18 +33,20 @@ fi
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# Check if the process is already running
-if ps aux | grep "[p]ython .*${SCRIPT}" > /dev/null
+# Check if the WebSocket listener is already running
+if pgrep -f "$SCRIPT" > /dev/null
 then
-    echo_msg "Bybit Listener is already running. Restarting..."
-    pkill -f "python .*${SCRIPT}"
+    echo_msg "Bybit WebSocket Listener is already running. Restarting..."
+    pkill -f "$SCRIPT"
     sleep 2
+else
+    echo_msg "Bybit WebSocket Listener is not running. Starting..."
 fi
 
-# Start the listener script
+# Start the WebSocket listener script
 nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
 if [ $? -eq 0 ]; then
-    echo_msg "Bybit Listener started successfully."
+    echo_msg "Bybit WebSocket Listener started successfully."
 else
-    echo_msg "Failed to start Bybit Listener. Check $LOG_FILE for details."
+    echo_msg "Failed to start Bybit WebSocket Listener. Check $LOG_FILE for details."
 fi

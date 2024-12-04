@@ -5,7 +5,7 @@ set -e
 set -x  # Enable debugging
 
 # Variables (modify these as per your environment)
-PROJECT_DIR="/home/osgawcom/ichhaberecht.com/bybit_stream_data"
+PROJECT_DIR="/home/osgawcom/ichhaberecht.com/bybit_stream_data"  # Update this path if different
 VENV_DIR="$PROJECT_DIR/env"
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/listener.log"
