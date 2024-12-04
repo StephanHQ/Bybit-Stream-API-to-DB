@@ -11,7 +11,7 @@ LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/listener.log"
 STORAGE_PATH="$PROJECT_DIR/storage"
 REQUIRED_PYTHON_VERSION="3.12"
-PYTHON_EXEC="python3.12"  # Explicit Python 3.12 executable
+PYTHON_EXEC="python3.12"
 PYTHON_INSTALL_DIR="/usr/local"
 PYTHON_SOURCE_URL="https://www.python.org/ftp/python/3.12.0/Python-3.12.0.tgz"
 PYTHON_SOURCE_DIR="/tmp/python3.12"
@@ -40,13 +40,21 @@ check_python_installation() {
     fi
 }
 
-# Function to install Python 3.12
+# Function to install Python 3.12 without sudo
 install_python() {
     echo_msg "Installing dependencies for Python build..."
-    sudo yum groupinstall -y "Development Tools"
-    sudo yum install -y gcc gcc-c++ zlib-devel bzip2 bzip2-devel \
-        readline-devel sqlite sqlite-devel openssl-devel xz xz-devel \
-        libffi-devel wget
+    
+    # Check for 'sudo' availability
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    else
+        echo_msg "sudo is not available. Attempting installation without it."
+        SUDO=""
+    fi
+
+    $SUDO yum groupinstall -y "Development Tools" || echo_msg "Failed to install development tools."
+    $SUDO yum install -y gcc gcc-c++ zlib-devel bzip2 bzip2-devel readline-devel \
+        sqlite sqlite-devel openssl-devel xz xz-devel libffi-devel wget || echo_msg "Failed to install dependencies."
 
     echo_msg "Downloading Python $REQUIRED_PYTHON_VERSION source..."
     mkdir -p $PYTHON_SOURCE_DIR
@@ -57,7 +65,7 @@ install_python() {
     cd $PYTHON_SOURCE_DIR
     ./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR
     make -j$(nproc)
-    sudo make altinstall
+    $SUDO make altinstall || echo_msg "Failed to install Python."
 
     echo_msg "Python $REQUIRED_PYTHON_VERSION installed successfully."
 }
