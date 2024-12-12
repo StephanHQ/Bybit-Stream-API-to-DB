@@ -1,5 +1,5 @@
-# === bybit_listener.py ===
-# bybit_listener.py
+# === bybit_flask.py ===
+# bybit_flask.py
 
 import os
 from os import sep as os_sep
@@ -580,15 +580,15 @@ if __name__ == "__main__":
     # Specify the directories and file extensions
     combine_files(
         base_directory='.',                     # Base directory (non-recursively)
-        additional_directory='from_cpanel_template',  # Additional folder (recursively)
+        additional_directory='from_cpanel_template_not_by_me',  # Additional folder (recursively)
         output_file='combined_output.txt',      # Output file name
         file_extensions=['.py', '.sh', '.yaml', '.txt', '.json', '.log']  # File extensions to include
     )
 
 
 # === combined_output.txt ===
-# === bybit_listener.py ===
-# bybit_listener.py
+# === bybit_flask.py ===
+# bybit_flask.py
 
 import os
 from os import sep as os_sep
@@ -1105,6 +1105,26 @@ trigger_file: "./save_now.trigger"  # Path to the trigger file for on-demand sav
 save_time_utc: "00:00"  # Time to trigger daily save in UTC (HH:MM format)
 
 
+# === passenger_wsgi.py ===
+import importlib.util
+import os
+import sys
+
+# Add the project directory to the Python path
+sys.path.insert(0, os.path.dirname(__file__))
+
+# Specify the path to the Flask application
+app_path = os.path.join(os.path.dirname(__file__), 'bybit_flask.py')
+
+# Load the Flask application module
+spec = importlib.util.spec_from_file_location('wsgi', app_path)
+wsgi = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(wsgi)
+
+# Assign the Flask app to 'application' for WSGI
+application = wsgi.app
+
+
 # === requirements.txt ===
 websocket-client>=1.6.1
 schedule>=1.2.0
@@ -1164,14 +1184,6 @@ fi
 
 # Exit immediately if a command exits with a non-zero status
 set -e
-set -x  # Enable debugging
-
-# Variables (modify these as per your environment)
-PROJECT_DIR="/home/osgawcom/ichhaberecht.com/bybit_stream_data"  # Update this path if different
-VENV_DIR="$PROJECT_DIR/env"
-LOG_DIR="$PROJECT_DIR/logs"
-LOG_FILE="$LOG_DIR/listener.log"
-STORAGE_PATH="$PROJECT_DIR/storage"
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -1179,6 +1191,16 @@ echo_msg() {
 }
 
 echo_msg "Starting setup..."
+
+# Determine the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$SCRIPT_DIR"
+
+# Define other directories based on PROJECT_DIR
+VENV_DIR="$PROJECT_DIR/env"
+LOG_DIR="$PROJECT_DIR/logs"
+LISTENER_LOG="$LOG_DIR/listener.log"
+STORAGE_PATH="$PROJECT_DIR/storage"
 
 # Create necessary directories with restrictive permissions
 echo_msg "Creating directories..."
@@ -1206,13 +1228,22 @@ echo_msg "Upgrading pip, setuptools, and wheel..."
 pip install --upgrade pip setuptools wheel
 
 # Install remaining dependencies
-echo_msg "Installing remaining dependencies..."
+echo_msg "Installing dependencies..."
 pip install -r "$PROJECT_DIR/requirements.txt"
 
 # Make start and restart scripts executable
-echo_msg "Setting permissions for start and restart scripts..."
+echo_msg "Setting permissions for scripts..."
 chmod 700 "$PROJECT_DIR/start_listener.sh"
 chmod 700 "$PROJECT_DIR/restart_listener.sh"
+chmod 700 "$PROJECT_DIR/stop_listener.sh"
+
+# Start Passenger Standalone for Flask App
+echo_msg "Starting Flask web application via Passenger Standalone..."
+nohup passenger start --app-type wsgi --startup-file passenger_wsgi.py --port 8000 --environment development > "$LOG_DIR/passenger.log" 2>&1 &
+
+# Start the WebSocket Listener
+echo_msg "Starting Bybit WebSocket Listener..."
+nohup python "$PROJECT_DIR/bybit_websocket_listener.py" > "$LISTENER_LOG" 2>&1 &
 
 echo_msg "Setup completed successfully."
 
@@ -1221,10 +1252,12 @@ echo_msg "Setup completed successfully."
 #!/bin/bash
 
 # Variables
-SCRIPT="bybit_websocket_listener.py"  # Updated to the WebSocket listener script
-LOG_FILE="$(pwd)/logs/listener.log"
-VENV_DIR="$(pwd)/env"
-PROJECT_DIR="$(pwd)"
+SCRIPT="bybit_websocket_listener.py"  # WebSocket listener script
+FLASK_APP="bybit_flask.py"            # Flask application script
+VENV_DIR="$(pwd)/env"                 # Path to the virtual environment
+PROJECT_DIR="$(pwd)"                  # Path to the project directory
+LOG_FILE="./logs/listener.log"
+FLASK_LOG="./logs/flask.log"
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -1234,49 +1267,26 @@ echo_msg() {
 echo_msg "Starting Bybit WebSocket Listener..."
 
 # Activate virtual environment
-if [ -f "$VENV_DIR/bin/activate" ]; then
-    source "$VENV_DIR/bin/activate"
-    echo_msg "Using Python: $(which python)"
-else
-    echo_msg "Virtual environment not found at $VENV_DIR."
-    exit 1
-fi
+source "$VENV_DIR/bin/activate"
 
-# Navigate to the project directory
-if [ -d "$PROJECT_DIR" ]; then
-    cd "$PROJECT_DIR"
-else
-    echo_msg "Project directory $PROJECT_DIR not found."
-    exit 1
-fi
+# Start the WebSocket Listener
+nohup python "$PROJECT_DIR/$SCRIPT" >> "$LOG_FILE" 2>&1 &
+echo_msg "Bybit WebSocket Listener started."
 
-# Ensure log directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
+echo_msg "Starting Flask web application via Passenger..."
 
-# Check if the WebSocket listener is already running
-if pgrep -f "$SCRIPT" > /dev/null
-then
-    echo_msg "Bybit WebSocket Listener is already running. Restarting..."
-    pkill -f "$SCRIPT"
-    sleep 2
-else
-    echo_msg "Bybit WebSocket Listener is not running. Starting..."
-fi
+# Ensure Passenger is running and configured to serve the Flask app
+# Typically, Passenger is configured to automatically start the app.
+# If not, you might need to start it manually or check Passenger configuration.
 
-# Start the WebSocket listener script
-nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
-if [ $? -eq 0 ]; then
-    echo_msg "Bybit WebSocket Listener started successfully."
-else
-    echo_msg "Failed to start Bybit WebSocket Listener. Check $LOG_FILE for details."
-fi
+echo_msg "Flask web application should now be running via Passenger."
 
 
 # === stop_listener.sh ===
 #!/bin/bash
 
 # Script name
-SCRIPT="bybit_listener.py"
+SCRIPT="bybit_websocket_listener.py"
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -1348,14 +1358,22 @@ def app(environ, start_response):
 
 
 # === passenger_wsgi.py ===
-import imp
+import importlib.util
 import os
 import sys
 
-
+# Add the project directory to the Python path
 sys.path.insert(0, os.path.dirname(__file__))
 
-wsgi = imp.load_source('wsgi', 'bybit_listener.py')
+# Specify the path to the Flask application
+app_path = os.path.join(os.path.dirname(__file__), 'bybit_flask.py')
+
+# Load the Flask application module
+spec = importlib.util.spec_from_file_location('wsgi', app_path)
+wsgi = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(wsgi)
+
+# Assign the Flask app to 'application' for WSGI
 application = wsgi.app
 
 

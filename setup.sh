@@ -2,14 +2,6 @@
 
 # Exit immediately if a command exits with a non-zero status
 set -e
-set -x  # Enable debugging
-
-# Variables (modify these as per your environment)
-PROJECT_DIR="/home/osgawcom/ichhaberecht.com/bybit_stream_data"
-VENV_DIR="$PROJECT_DIR/env"
-LOG_DIR="$PROJECT_DIR/logs"
-LOG_FILE="$LOG_DIR/listener.log"
-STORAGE_PATH="$PROJECT_DIR/storage"
 
 # Function to print messages with timestamp
 echo_msg() {
@@ -17,6 +9,17 @@ echo_msg() {
 }
 
 echo_msg "Starting setup..."
+
+# Determine the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$SCRIPT_DIR"
+
+# Define other directories based on PROJECT_DIR
+VENV_DIR="$PROJECT_DIR/env"
+LOG_DIR="$PROJECT_DIR/logs"
+LISTENER_LOG="$LOG_DIR/listener.log"
+GUNICORN_LOG="$LOG_DIR/gunicorn.log"
+STORAGE_PATH="$PROJECT_DIR/storage"
 
 # Create necessary directories with restrictive permissions
 echo_msg "Creating directories..."
@@ -44,12 +47,13 @@ echo_msg "Upgrading pip, setuptools, and wheel..."
 pip install --upgrade pip setuptools wheel
 
 # Install remaining dependencies
-echo_msg "Installing remaining dependencies..."
+echo_msg "Installing dependencies..."
 pip install -r "$PROJECT_DIR/requirements.txt"
 
 # Make start and restart scripts executable
-echo_msg "Setting permissions for start and restart scripts..."
+echo_msg "Setting permissions for scripts..."
 chmod 700 "$PROJECT_DIR/start_listener.sh"
 chmod 700 "$PROJECT_DIR/restart_listener.sh"
+chmod 700 "$PROJECT_DIR/stop_listener.sh"
 
 echo_msg "Setup completed successfully."

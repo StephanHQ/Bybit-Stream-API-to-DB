@@ -76,7 +76,7 @@ if __name__ == "__main__":
     # Specify the directories and file extensions
     combine_files(
         base_directory='.',                     # Base directory (non-recursively)
-        additional_directory='from_cpanel_template',  # Additional folder (recursively)
+        additional_directory='from_cpanel_template_not_by_me',  # Additional folder (recursively)
         output_file='combined_output.txt',      # Output file name
         file_extensions=['.py', '.sh', '.yaml', '.txt', '.json', '.log']  # File extensions to include
     )

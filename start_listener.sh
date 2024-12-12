@@ -1,52 +1,47 @@
 #!/bin/bash
 
 # Variables
-SCRIPT="bybit_websocket_listener.py"  # Updated to the WebSocket listener script
-LOG_FILE="$(pwd)/logs/listener.log"
-VENV_DIR="$(pwd)/env"
-PROJECT_DIR="$(pwd)"
+SCRIPT="bybit_websocket_listener.py"  # WebSocket listener script
+FLASK_APP_MODULE="bybit_flask:app"    # Gunicorn requires module:app
+VENV_DIR="$(pwd)/env"                 # Path to the virtual environment
+PROJECT_DIR="$(pwd)"                  # Path to the project directory
+LISTENER_LOG="./logs/listener.log"
+GUNICORN_LOG="./logs/gunicorn.log"
 
 # Function to print messages with timestamp
 echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-echo_msg "Starting Bybit WebSocket Listener..."
+if [ "$PRODUCTION" = "true" ]; then
+    echo_msg "Production mode detected. Starting Flask app with Passenger (cPanel managed)."
+    # In production, Passenger handles the Flask app. Ensure cPanel is configured correctly.
+    # Start the WebSocket Listener if required and allowed by cPanel.
+    # Note: cPanel might have restrictions on running persistent background processes.
+    
+    # Example: Starting WebSocket Listener via a background process
+    # Adjust as per cPanel's capabilities and policies.
+    echo_msg "Starting Bybit WebSocket Listener..."
+    nohup python "$PROJECT_DIR/$SCRIPT" > "$LISTENER_LOG" 2>&1 &
+    LISTENER_PID=$!
+    echo_msg "WebSocket Listener started with PID $LISTENER_PID."
+else
+    echo_msg "Local mode detected. Starting Flask web application with Gunicorn."
 
-# Activate virtual environment
-if [ -f "$VENV_DIR/bin/activate" ]; then
+    # Activate virtual environment
     source "$VENV_DIR/bin/activate"
-    echo_msg "Using Python: $(which python)"
-else
-    echo_msg "Virtual environment not found at $VENV_DIR."
-    exit 1
-fi
 
-# Navigate to the project directory
-if [ -d "$PROJECT_DIR" ]; then
-    cd "$PROJECT_DIR"
-else
-    echo_msg "Project directory $PROJECT_DIR not found."
-    exit 1
-fi
+    # Start Gunicorn in the background
+    nohup gunicorn -w 4 -b 127.0.0.1:8000 "$FLASK_APP_MODULE" > "$GUNICORN_LOG" 2>&1 &
+    GUNICORN_PID=$!
+    echo_msg "Gunicorn started with PID $GUNICORN_PID."
 
-# Ensure log directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
+    echo_msg "Starting Bybit WebSocket Listener..."
 
-# Check if the WebSocket listener is already running
-if pgrep -f "$SCRIPT" > /dev/null
-then
-    echo_msg "Bybit WebSocket Listener is already running. Restarting..."
-    pkill -f "$SCRIPT"
-    sleep 2
-else
-    echo_msg "Bybit WebSocket Listener is not running. Starting..."
-fi
+    # Start the WebSocket Listener in the background
+    nohup python "$PROJECT_DIR/$SCRIPT" > "$LISTENER_LOG" 2>&1 &
+    LISTENER_PID=$!
+    echo_msg "WebSocket Listener started with PID $LISTENER_PID."
 
-# Start the WebSocket listener script
-nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
-if [ $? -eq 0 ]; then
-    echo_msg "Bybit WebSocket Listener started successfully."
-else
-    echo_msg "Failed to start Bybit WebSocket Listener. Check $LOG_FILE for details."
+    echo_msg "All services started successfully."
 fi
