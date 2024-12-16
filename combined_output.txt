@@ -1141,42 +1141,20 @@ python-dotenv>=1.0.0
 # === restart_listener.sh ===
 #!/bin/bash
 
-# Variables
-SCRIPT="bybit_websocket_listener.py"  # Updated to the WebSocket listener script
-VENV_DIR="$(pwd)/env"                 # Absolute path to the virtual environment
-PROJECT_DIR="$(pwd)"                  # Absolute path to the project directory
-LOG_FILE="./logs/listener.log"
-
 # Function to print messages with timestamp
 echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-echo_msg "Restarting Bybit WebSocket Listener..."
+echo_msg "Restarting Flask web application and WebSocket Listener..."
 
-# Activate virtual environment
-source "$VENV_DIR/bin/activate"
+# Stop existing services
+./stop_listener.sh
 
-# Navigate to the project directory
-cd "$PROJECT_DIR"
+# Start services
+./start_listener.sh
 
-# Stop the listener if it's running
-if pgrep -f "$SCRIPT" > /dev/null
-then
-    pkill -f "$SCRIPT"
-    echo_msg "Bybit WebSocket Listener stopped."
-    sleep 2
-else
-    echo_msg "Bybit WebSocket Listener is not running."
-fi
-
-# Start the listener
-nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
-if [ $? -eq 0 ]; then
-    echo_msg "Bybit WebSocket Listener restarted successfully."
-else
-    echo_msg "Failed to restart Bybit WebSocket Listener. Check $LOG_FILE for details."
-fi
+echo_msg "All services restarted successfully."
 
 
 # === setup.sh ===
@@ -1200,6 +1178,7 @@ PROJECT_DIR="$SCRIPT_DIR"
 VENV_DIR="$PROJECT_DIR/env"
 LOG_DIR="$PROJECT_DIR/logs"
 LISTENER_LOG="$LOG_DIR/listener.log"
+GUNICORN_LOG="$LOG_DIR/gunicorn.log"
 STORAGE_PATH="$PROJECT_DIR/storage"
 
 # Create necessary directories with restrictive permissions
@@ -1237,14 +1216,6 @@ chmod 700 "$PROJECT_DIR/start_listener.sh"
 chmod 700 "$PROJECT_DIR/restart_listener.sh"
 chmod 700 "$PROJECT_DIR/stop_listener.sh"
 
-# Start Passenger Standalone for Flask App
-echo_msg "Starting Flask web application via Passenger Standalone..."
-nohup passenger start --app-type wsgi --startup-file passenger_wsgi.py --port 8000 --environment development > "$LOG_DIR/passenger.log" 2>&1 &
-
-# Start the WebSocket Listener
-echo_msg "Starting Bybit WebSocket Listener..."
-nohup python "$PROJECT_DIR/bybit_websocket_listener.py" > "$LISTENER_LOG" 2>&1 &
-
 echo_msg "Setup completed successfully."
 
 
@@ -1253,58 +1224,95 @@ echo_msg "Setup completed successfully."
 
 # Variables
 SCRIPT="bybit_websocket_listener.py"  # WebSocket listener script
-FLASK_APP="bybit_flask.py"            # Flask application script
+FLASK_APP_MODULE="bybit_flask:app"    # Gunicorn requires module:app
 VENV_DIR="$(pwd)/env"                 # Path to the virtual environment
 PROJECT_DIR="$(pwd)"                  # Path to the project directory
-LOG_FILE="./logs/listener.log"
-FLASK_LOG="./logs/flask.log"
+LISTENER_LOG="./logs/listener.log"
+GUNICORN_LOG="./logs/gunicorn.log"
 
 # Function to print messages with timestamp
 echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-echo_msg "Starting Bybit WebSocket Listener..."
+if [ "$PRODUCTION" = "true" ]; then
+    echo_msg "Production mode detected. Starting Flask app with Passenger (cPanel managed)."
+    # In production, Passenger handles the Flask app. Ensure cPanel is configured correctly.
+    # Start the WebSocket Listener if required and allowed by cPanel.
+    # Note: cPanel might have restrictions on running persistent background processes.
+    
+    # Example: Starting WebSocket Listener via a background process
+    # Adjust as per cPanel's capabilities and policies.
+    echo_msg "Starting Bybit WebSocket Listener..."
+    nohup python "$PROJECT_DIR/$SCRIPT" > "$LISTENER_LOG" 2>&1 &
+    LISTENER_PID=$!
+    echo_msg "WebSocket Listener started with PID $LISTENER_PID."
+else
+    echo_msg "Local mode detected. Starting Flask web application with Gunicorn."
 
-# Activate virtual environment
-source "$VENV_DIR/bin/activate"
+    # Activate virtual environment
+    source "$VENV_DIR/bin/activate"
 
-# Start the WebSocket Listener
-nohup python "$PROJECT_DIR/$SCRIPT" >> "$LOG_FILE" 2>&1 &
-echo_msg "Bybit WebSocket Listener started."
+    # Start Gunicorn in the background
+    nohup gunicorn -w 4 -b 127.0.0.1:8000 "$FLASK_APP_MODULE" > "$GUNICORN_LOG" 2>&1 &
+    GUNICORN_PID=$!
+    echo_msg "Gunicorn started with PID $GUNICORN_PID."
 
-echo_msg "Starting Flask web application via Passenger..."
+    echo_msg "Starting Bybit WebSocket Listener..."
 
-# Ensure Passenger is running and configured to serve the Flask app
-# Typically, Passenger is configured to automatically start the app.
-# If not, you might need to start it manually or check Passenger configuration.
+    # Start the WebSocket Listener in the background
+    nohup python "$PROJECT_DIR/$SCRIPT" > "$LISTENER_LOG" 2>&1 &
+    LISTENER_PID=$!
+    echo_msg "WebSocket Listener started with PID $LISTENER_PID."
 
-echo_msg "Flask web application should now be running via Passenger."
+    echo_msg "All services started successfully."
+fi
 
 
 # === stop_listener.sh ===
 #!/bin/bash
 
-# Script name
-SCRIPT="bybit_websocket_listener.py"
-
 # Function to print messages with timestamp
 echo_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-echo_msg "Stopping Bybit Listener..."
+echo_msg "Stopping Flask web application and WebSocket Listener..."
 
-# Find the process ID of the running script
-PID=$(pgrep -f "$SCRIPT")
+if [ "$PRODUCTION" = "true" ]; then
+    echo_msg "Production mode detected. Stopping WebSocket Listener if running."
 
-if [ -n "$PID" ]; then
-    # Kill the process
-    kill "$PID"
-    echo_msg "Bybit Listener (PID: $PID) stopped."
+    # Find and kill WebSocket listener processes
+    LISTENER_PIDS=$(pgrep -f "bybit_websocket_listener.py")
+    if [ -n "$LISTENER_PIDS" ]; then
+        kill $LISTENER_PIDS
+        echo_msg "WebSocket Listener processes (PIDs: $LISTENER_PIDS) stopped."
+    else
+        echo_msg "No WebSocket Listener processes found."
+    fi
 else
-    echo_msg "Bybit Listener is not running."
+    echo_msg "Local mode detected. Stopping Gunicorn and WebSocket Listener."
+
+    # Find and kill Gunicorn processes
+    GUNICORN_PIDS=$(pgrep -f "gunicorn")
+    if [ -n "$GUNICORN_PIDS" ]; then
+        kill $GUNICORN_PIDS
+        echo_msg "Gunicorn processes (PIDs: $GUNICORN_PIDS) stopped."
+    else
+        echo_msg "No Gunicorn processes found."
+    fi
+
+    # Find and kill WebSocket listener processes
+    LISTENER_PIDS=$(pgrep -f "bybit_websocket_listener.py")
+    if [ -n "$LISTENER_PIDS" ]; then
+        kill $LISTENER_PIDS
+        echo_msg "WebSocket Listener processes (PIDs: $LISTENER_PIDS) stopped."
+    else
+        echo_msg "No WebSocket Listener processes found."
+    fi
 fi
+
+echo_msg "All services stopped successfully."
 
 
 # === symbols.json ===
