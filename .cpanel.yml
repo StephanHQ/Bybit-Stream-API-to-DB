@@ -1,13 +1,12 @@
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/osgawcom/ichhaberecht.com/bybit_stream_data
+    # Set the deployment path to the app folder
+    - export DEPLOYPATH=/home/osgawcom/ichhaberecht.com/app
+
+    # Create the deployment directory if it doesn't exist
     - echo "Creating deployment directory at $DEPLOYPATH"
     - mkdir -p $DEPLOYPATH
+
+    # Sync files from the Git repo to the app folder, excluding unnecessary files
     - echo "Syncing files to $DEPLOYPATH"
     - rsync -avz . $DEPLOYPATH --exclude '.git' --exclude '.env' --exclude '__pycache__'
-    - cd $DEPLOYPATH
-    - echo "Running setup.sh to configure the environment..."
-    - chmod +x setup.sh
-    - ./setup.sh >> deployment_log.log 2>> deployment_errors.log
-    - echo "Starting the application..."
-    - nohup ./start_listener.sh >> deployment_log.log 2>> deployment_errors.log &
