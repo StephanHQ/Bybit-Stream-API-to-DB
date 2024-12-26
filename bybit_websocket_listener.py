@@ -116,47 +116,62 @@ async def save_message(channel_type, topic, message):
 
 async def process_queue(channel_type, topic, queue):
     global log_counter
+    last_utc_date = get_current_utc_date()  # Initialize with the current date
+    symbol = topic.split(".")[-1]
+    topic_base = ".".join(topic.split(".")[:-1])
+
+    channel_folder = os.path.join(CSV_FOLDER, channel_type)
+    symbol_folder = os.path.join(channel_folder, symbol)  # New layer for symbol
+    topic_folder = os.path.join(symbol_folder, topic_base)  # Topic folder under symbol
+
+    # Ensure the directories exist
+    os.makedirs(topic_folder, exist_ok=True)
+
+    buffer = []
+    write_interval = WRITE_INTERVAL  # Seconds
+
     while True:
         try:
-            utc_date = get_current_utc_date()
+            current_utc_date = get_current_utc_date()
 
-            # Extract the symbol from the topic
-            # Example: "orderbook.1.BTCUSDT" -> "BTCUSDT"
-            symbol = topic.split(".")[-1]
-            topic_base = ".".join(topic.split(".")[:-1])
+            # Check if the date has changed
+            if current_utc_date != last_utc_date:
+                # Write any remaining buffer to the old file
+                if buffer:
+                    old_csv_file = os.path.join(topic_folder, f"{last_utc_date}_{topic}.csv")
+                    await write_buffer_to_file(old_csv_file, buffer)
+                    log_counter += len(buffer)
+                    if log_counter >= LOG_INTERVAL:
+                        logger.info(f"Written {log_counter} messages to {old_csv_file}")
+                        log_counter = 0
+                    buffer.clear()
 
-            channel_folder = os.path.join(CSV_FOLDER, channel_type)
-            symbol_folder = os.path.join(channel_folder, symbol)  # New layer for symbol
-            topic_folder = os.path.join(symbol_folder, topic_base)  # Topic folder under symbol
+                # Update the date and reset buffer
+                last_utc_date = current_utc_date
+                logger.info(f"Date changed. Switching to new CSV file for {current_utc_date}.")
 
-            # Ensure the directories exist
-            os.makedirs(topic_folder, exist_ok=True)
+            # Define the CSV file path based on the current date
+            csv_file = os.path.join(topic_folder, f"{current_utc_date}_{topic}.csv")
 
-            # Define the CSV file path
-            csv_file = os.path.join(topic_folder, f"{utc_date}_{topic}.csv")
+            try:
+                message = await asyncio.wait_for(queue.get(), timeout=write_interval)
+                buffer.append(json.dumps(message))
+                if len(buffer) >= BUFFER_LIMIT:
+                    await write_buffer_to_file(csv_file, buffer)
+                    log_counter += len(buffer)
+                    if log_counter >= LOG_INTERVAL:
+                        logger.info(f"Written {log_counter} messages to {csv_file}")
+                        log_counter = 0
+                    buffer.clear()
+            except asyncio.TimeoutError:
+                if buffer:
+                    await write_buffer_to_file(csv_file, buffer)
+                    log_counter += len(buffer)
+                    if log_counter >= LOG_INTERVAL:
+                        logger.info(f"Written {log_counter} messages to {csv_file}")
+                        log_counter = 0
+                    buffer.clear()
 
-            buffer = []
-            write_interval = WRITE_INTERVAL  # Seconds
-
-            while True:
-                try:
-                    message = await asyncio.wait_for(queue.get(), timeout=write_interval)
-                    buffer.append(json.dumps(message))
-                    if len(buffer) >= BUFFER_LIMIT:
-                        await write_buffer_to_file(csv_file, buffer)
-                        buffer.clear()
-                        log_counter += len(buffer)
-                        if log_counter >= LOG_INTERVAL:
-                            logger.info(f"Written {log_counter} messages to {csv_file}")
-                            log_counter = 0
-                except asyncio.TimeoutError:
-                    if buffer:
-                        await write_buffer_to_file(csv_file, buffer)
-                        log_counter += len(buffer)
-                        if log_counter >= LOG_INTERVAL:
-                            logger.info(f"Written {log_counter} messages to {csv_file}")
-                            log_counter = 0
-                        buffer.clear()
         except Exception as e:
             logger.error(f"Error in processing queue for {channel_type}.{topic}: {e}")
             await asyncio.sleep(1)  # Prevent tight loop on error
@@ -420,6 +435,8 @@ async def main():
         tg.create_task(connect_and_listen("linear"))
         tg.create_task(connect_and_listen("spot"))
         tg.create_task(connect_and_listen("inverse"))
+        # Uncomment the following line if you have 'options' channel_type
+        # tg.create_task(connect_and_listen("options"))
 
 if __name__ == "__main__":
     try:
